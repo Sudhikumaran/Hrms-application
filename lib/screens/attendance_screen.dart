@@ -416,20 +416,38 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                   return Center(child: CircularProgressIndicator());
                 }
                 final records = snapshot.data ?? [];
-                if (records.isEmpty) {
-                  return Center(child: Text('No attendance records found', style: TextStyle(color: Colors.grey[600])));
-                }
-                return Column(
-                  children: records.map((r) {
-                    if (r == null) return SizedBox.shrink();
-                    final date = r.date ?? '--';
-                    final checkIn = r.checkIn ?? '--:--';
-                    final checkOut = r.checkOut ?? '--:--';
-                    final hours = r.hours.toStringAsFixed(2);
-                    final status = r.status ?? '--';
-                    final color = status == 'Present' ? Colors.green : Colors.red;
-                    return _buildHistoryItem(date, '$checkIn - $checkOut', '$hours hrs', status, color);
-                  }).toList(),
+                return RefreshIndicator(
+                  onRefresh: _restoreCheckInStatus,
+                  child: records.isEmpty
+                      ? ListView(
+                          physics: AlwaysScrollableScrollPhysics(),
+                          shrinkWrap: true,
+                          children: [
+                            SizedBox(height: 60),
+                            Icon(Icons.history, size: 50, color: Colors.grey[400]),
+                            SizedBox(height: 10),
+                            Center(
+                                child: Text(
+                              'No attendance history yet.\nCheck in to start your record!',
+                              style: TextStyle(color: Colors.grey[500], fontSize: 16),
+                              textAlign: TextAlign.center,
+                            )),
+                            SizedBox(height: 60)
+                          ],
+                        )
+                      : ListView(
+                          shrinkWrap: true,
+                          physics: AlwaysScrollableScrollPhysics(),
+                          children: records.map((r) {
+                            final date = r.date ?? '--';
+                            final checkIn = r.checkIn ?? '--:--';
+                            final checkOut = r.checkOut ?? '--:--';
+                            final hours = r.hours.toStringAsFixed(2);
+                            final status = r.status ?? '--';
+                            final color = status == 'Present' ? Colors.green : Colors.red;
+                            return _buildHistoryItem(date, '$checkIn - $checkOut', '$hours hrs', status, color);
+                          }).toList(),
+                        ),
                 );
               },
             ),

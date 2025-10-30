@@ -5,6 +5,7 @@ import 'leave_screen.dart';
 import '../services/local_storage_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
+import 'notifications_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   @override
@@ -74,7 +75,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         actions: [
           IconButton(
             icon: Icon(Icons.notifications, color: Colors.black87),
-            onPressed: () {},
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => NotificationsScreen())),
           ),
         ],
       ),

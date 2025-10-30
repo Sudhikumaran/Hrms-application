@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../services/local_storage_service.dart';
 import '../models/attendance_record.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class EmployeeAnalyticsScreen extends StatefulWidget {
   @override
@@ -109,8 +110,37 @@ class _EmployeeAnalyticsScreenState extends State<EmployeeAnalyticsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('My Analytics'),
-        backgroundColor: Color(0xFF1976D2),
+        title: Row(
+          children: [
+            Image.asset(
+              'assets/images/fortumars_logo.png',
+              width: 90,
+              height: 90,
+              fit: BoxFit.contain,
+            ),
+            Expanded(
+              child: Center(
+                child: Text(
+                  'My Analytics',
+                  style: GoogleFonts.outfit(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(width: 90), // Balance logo
+          ],
+        ),
+        centerTitle: true,
+        backgroundColor: Color(0xFFF5F5F5),
+        foregroundColor: Colors.black87,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
       ),
       body: Padding(
         padding: EdgeInsets.all(16),
