@@ -64,6 +64,20 @@ class LocalStorageService {
     return await _prefs?.setString(key, jsonEncode(jsonList)) ?? false;
   }
 
+  // Upsert attendance for a specific date (replace if same date exists)
+  static Future<bool> upsertAttendance(String empId, AttendanceRecord record) async {
+    final key = 'attendance_$empId';
+    final existing = getAttendance(empId);
+    final idx = existing.indexWhere((r) => r.date == record.date);
+    if (idx >= 0) {
+      existing[idx] = record;
+    } else {
+      existing.add(record);
+    }
+    final jsonList = existing.map((e) => e.toJson()).toList();
+    return await _prefs?.setString(key, jsonEncode(jsonList)) ?? false;
+  }
+
   static List<AttendanceRecord> getAttendance(String empId) {
     final key = 'attendance_$empId';
     final jsonString = _prefs?.getString(key);

@@ -20,6 +20,7 @@ class PdfService {
     final List<Map<String, dynamic>> presentEmployees = [];
     final List<Map<String, dynamic>> absentEmployees = [];
     final List<Map<String, dynamic>> lateEmployees = [];
+    final List<Map<String, dynamic>> wfhEmployees = [];
 
     for (var employee in employees) {
       final empId = employee.empId;
@@ -40,6 +41,15 @@ class PdfService {
         });
       } else {
         final checkInTime = todayRecord.checkIn ?? '--:--';
+        // WFH handling
+        if ((todayRecord.status ?? '').toString().toUpperCase() == 'WFH') {
+          wfhEmployees.add({
+            'name': employee.name,
+            'checkIn': checkInTime,
+            'checkOut': todayRecord.checkOut ?? '--:--',
+          });
+          continue;
+        }
         // Consider late if check-in is after 9:15 AM
         final isLate = _isLateCheckIn(checkInTime);
 
@@ -105,6 +115,17 @@ class PdfService {
               pw.SizedBox(height: 20),
             ],
 
+            // WFH Employees Section
+            if (wfhEmployees.isNotEmpty) ...[
+              pw.Text(
+                'Working From Home (${wfhEmployees.length})',
+                style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.blueGrey800),
+              ),
+              pw.SizedBox(height: 10),
+              _buildTable(['Employee Name', 'Check-in Time', 'Check-out Time'], wfhEmployees),
+              pw.SizedBox(height: 20),
+            ],
+
             // Absent Employees Section
             pw.Text(
               'Absent Employees (${absentEmployees.length})',
@@ -117,7 +138,7 @@ class PdfService {
             // Summary
             pw.Divider(),
             pw.Text(
-              'Summary: Total: ${employees.length} | Present: ${presentEmployees.length} | Late: ${lateEmployees.length} | Absent: ${absentEmployees.length}',
+              'Summary: Total: ${employees.length} | Present: ${presentEmployees.length} | Late: ${lateEmployees.length} | WFH: ${wfhEmployees.length} | Absent: ${absentEmployees.length}',
               style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
             ),
           ];

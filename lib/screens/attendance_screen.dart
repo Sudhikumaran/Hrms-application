@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:geolocator/geolocator.dart';
 import '../models/employee.dart';
@@ -18,6 +19,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   String? checkInTime;
   String attendanceMethod = 'facial';
   bool showCamera = false;
+  bool _isWfh = false; // Working from home flag (chosen at check-in)
 
   String? userId;
   String get _todayDate => DateFormat('yyyyMMdd').format(DateTime.now());
@@ -31,6 +33,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   DateTime? _breakStart;
   int _breakAccumulatedMs = 0;
   DateTime? _checkInRaw;
+  Timer? _breakTicker;
 
   @override
   void initState() {
@@ -55,6 +58,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       final raw = prefs.getString('attendance_checkin_raw_${userId}_$_todayDate');
       _checkInRaw = raw != null ? DateTime.tryParse(raw) : null;
     });
+    // Restore WFH status from today's attendance record
+    final todayRecords = LocalStorageService.getAttendance(userId!).where((r) => r.date == _todayDate).toList();
+    if (todayRecords.isNotEmpty) {
+      _isWfh = (todayRecords.first.status ?? '').toUpperCase() == 'WFH';
+    }
     // Restore break state
     _breakAccumulatedMs = prefs.getInt('break_acc_${userId}_$_todayDate') ?? 0;
     final startIso = prefs.getString('break_start_${userId}_$_todayDate');
@@ -62,6 +70,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       _breakStart = DateTime.tryParse(startIso);
       _onBreak = _breakStart != null;
     }
+    if (_onBreak) _startBreakTicker();
     // Compute geofence distance
     try {
       final office = await LocationService.getOfficeLocation();
@@ -192,6 +201,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               ),
               child: Column(
                 children: [
+                  // Choice of Office vs WFH now appears after pressing Check In
                   if (_reminderText != null) ...[
                     Container(
                       width: double.infinity,
@@ -244,7 +254,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       child: ElevatedButton(
                         onPressed: isCheckedIn
                             ? _checkOut
-                            : _checkInByLocation,
+                            : _chooseCheckInMode,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.white,
                           foregroundColor: isCheckedIn
@@ -280,10 +290,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             child: Row(children:[Icon(Icons.place, color: Colors.white, size: 16), SizedBox(width: 6), Text('${_distanceMeters!.toStringAsFixed(0)} m away', style: TextStyle(color: Colors.white))]),
                           ),
                         SizedBox(width: 10),
-                        TextButton(
-                          onPressed: _offlineCheckIn,
-                          child: Text('Offline Check-In', style: TextStyle(color: Colors.white)),
-                        ),
                       ],
                     ),
                   ],
@@ -564,6 +570,21 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       checkInTime = TimeOfDay.now().format(context);
     });
     _persistCheckInStatus(true, checkInTime);
+    // Save attendance record (upsert) with WFH status when selected
+    final empId = LocalStorageService.getUserId();
+    if (empId != null) {
+      final today = DateFormat('yyyyMMdd').format(DateTime.now());
+      final record = AttendanceRecord(
+        date: today,
+        checkIn: DateFormat('HH:mm').format(DateTime.now()),
+        checkOut: null,
+        status: _isWfh ? 'WFH' : 'Present',
+        hours: 0,
+        location: _isWfh ? 'Home' : 'Office',
+        method: method,
+      );
+      LocalStorageService.upsertAttendance(empId, record);
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Checked in (${_expectedCheckInLabel ?? 'Shift'}) via $method'),
@@ -573,27 +594,118 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     );
   }
 
-  // Offline check-in queue
-  void _offlineCheckIn() async {
-    await LocalStorageService.init();
-    final id = LocalStorageService.getUserId();
-    if (id == null) return;
-    final item = {
-      'empId': id,
-      'type': 'checkin',
-      'date': _todayDate,
-      'time': DateFormat('HH:mm').format(DateTime.now()),
-      'method': 'offline',
-    };
-    await LocalStorageService.addPendingAttendance(item);
-    _performCheckIn('Offline');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Offline check-in queued for sync'), backgroundColor: Colors.orange),
+  // Let user choose Office vs WFH on check-in
+  void _chooseCheckInMode() {
+    showModalBottomSheet(
+      context: context,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Choose Check-In Mode', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                SizedBox(height: 12),
+                Row(children:[
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        setState(()=> _isWfh = false);
+                        _checkInByLocation(); // Office: location + OTP
+                      },
+                      icon: Icon(Icons.apartment),
+                      label: Text('Office'),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        setState(()=> _isWfh = true);
+                        _showOtpDialogWfh(); // WFH: OTP only
+                      },
+                      icon: Icon(Icons.home),
+                      label: Text('WFH'),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                    ),
+                  ),
+                ]),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
+  void _showOtpDialogWfh() {
+    final otp = (100000 + (DateTime.now().millisecondsSinceEpoch % 900000)).toString();
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('OTP Verification (WFH)'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Enter the OTP below to Check In.'),
+            SizedBox(height: 8),
+            Row(children:[
+              Text('OTP: ', style: TextStyle(fontWeight: FontWeight.bold)),
+              SelectableText(otp, style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 18)),
+            ]),
+            SizedBox(height: 16),
+            TextField(
+              controller: ctrl,
+              decoration: InputDecoration(labelText: 'Enter OTP'),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              if (ctrl.text == otp) {
+                Navigator.pop(context);
+                _performCheckIn('WFH + OTP');
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid OTP'), backgroundColor: Colors.red));
+              }
+            },
+            child: Text('Check In'),
+          ),
+          TextButton(onPressed: ()=>Navigator.pop(context), child: Text('Cancel')),
+        ],
+      ),
+    );
+  }
+
+  // Offline check-in removed per requirement
+
   void _checkOut() async {
-    // Fetch location and verify before allowing check out
+    // Determine WFH from today's saved record to be robust even if state resets
+    bool isWfhToday = _isWfh;
+    final empId = LocalStorageService.getUserId();
+    if (empId != null) {
+      final todayRecs = LocalStorageService.getAttendance(empId).where((r)=> r.date == _todayDate).toList();
+      if (todayRecs.isNotEmpty) {
+        final st = (todayRecs.first.status ?? '').toUpperCase();
+        isWfhToday = st == 'WFH';
+        _isWfh = isWfhToday;
+      }
+    }
+    // If WFH, OTP only (no location)
+    if (isWfhToday) {
+      _showOtpDialogCheckOutWfh();
+      return;
+    }
+    // Office: Fetch location and verify before allowing check out
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -692,12 +804,85 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     );
   }
 
+  void _showOtpDialogCheckOutWfh() {
+    final otp = (100000 + (DateTime.now().millisecondsSinceEpoch % 900000)).toString();
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('OTP Verification (WFH)'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Enter the OTP below to Check Out.'),
+            SizedBox(height: 8),
+            Row(children:[
+              Text('OTP: ', style: TextStyle(fontWeight: FontWeight.bold)),
+              SelectableText(otp, style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 18)),
+            ]),
+            SizedBox(height: 16),
+            TextField(
+              controller: ctrl,
+              decoration: InputDecoration(labelText: 'Enter OTP'),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              if (ctrl.text == otp) {
+                Navigator.pop(context);
+                _doCheckOut();
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid OTP'), backgroundColor: Colors.red));
+              }
+            },
+            child: Text('Check Out'),
+          ),
+          TextButton(onPressed: ()=>Navigator.pop(context), child: Text('Cancel')),
+        ],
+      ),
+    );
+  }
+
   void _doCheckOut() {
     setState(() {
       isCheckedIn = false;
       checkInTime = null;
     });
     _persistCheckInStatus(false);
+    // Update today's attendance record with checkout and hours
+    final empId = LocalStorageService.getUserId();
+    if (empId != null) {
+      final today = DateFormat('yyyyMMdd').format(DateTime.now());
+      final records = LocalStorageService.getAttendance(empId);
+      final idx = records.indexWhere((r) => r.date == today);
+      if (idx >= 0) {
+        final r = records[idx];
+        final startIsoKey = 'attendance_checkin_raw_${empId}_$today';
+        SharedPreferences.getInstance().then((prefs){
+          final raw = prefs.getString(startIsoKey);
+          DateTime? start = raw!=null?DateTime.tryParse(raw):null;
+          int breakMs = prefs.getInt('break_acc_${empId}_$today') ?? 0;
+          if (start != null) {
+            final workedMs = DateTime.now().difference(start).inMilliseconds - breakMs;
+            final hours = (workedMs / (1000*60*60)).clamp(0, 24).toDouble();
+            final updated = AttendanceRecord(
+              date: r.date,
+              checkIn: r.checkIn,
+              checkOut: DateFormat('HH:mm').format(DateTime.now()),
+              status: r.status,
+              hours: hours,
+              location: r.location,
+              method: r.method,
+            );
+            LocalStorageService.upsertAttendance(empId, updated);
+          }
+        });
+      }
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Checked out successfully'),
@@ -724,10 +909,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     if (_onBreak && _breakStart != null) {
       ms += DateTime.now().difference(_breakStart!).inMilliseconds;
     }
-    final totalMinutes = (ms / 60000).floor();
-    final h = (totalMinutes ~/ 60).toString().padLeft(2, '0');
-    final m = (totalMinutes % 60).toString().padLeft(2, '0');
-    return '$h:$m';
+    // Display as MM:SS (minutes:seconds)
+    final totalSeconds = (ms / 1000).floor();
+    final m = (totalSeconds ~/ 60).toString().padLeft(2, '0');
+    final s = (totalSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
   }
 
   Future<void> _startBreak() async {
@@ -736,6 +922,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     _breakStart = DateTime.now();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('break_start_${userId}_$_todayDate', _breakStart!.toIso8601String());
+    _startBreakTicker();
     setState(() {});
   }
 
@@ -748,6 +935,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('break_start_${userId}_$_todayDate');
     await prefs.setInt('break_acc_${userId}_$_todayDate', _breakAccumulatedMs);
+    _breakTicker?.cancel();
     setState(() {});
   }
 
@@ -757,6 +945,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     _breakStart = DateTime.now();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('break_start_${userId}_$_todayDate', _breakStart!.toIso8601String());
+    _startBreakTicker();
     setState(() {});
   }
 
@@ -769,7 +958,25 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('break_start_${userId}_$_todayDate');
     await prefs.setInt('break_acc_${userId}_$_todayDate', _breakAccumulatedMs);
+    _breakTicker?.cancel();
     setState(() {});
+  }
+
+  void _startBreakTicker() {
+    _breakTicker?.cancel();
+    _breakTicker = Timer.periodic(Duration(seconds: 1), (_) {
+      if (!_onBreak) {
+        _breakTicker?.cancel();
+        return;
+      }
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _breakTicker?.cancel();
+    super.dispose();
   }
 
   Widget _buildSummaryItem(

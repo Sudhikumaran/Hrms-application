@@ -16,10 +16,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DateTime? checkInTimestamp;
   bool isCheckedIn = false;
   String? userId;
+  String? _shiftLabel;
+  Duration? _countdown;
+  int _breakMinutesToday = 0;
+  double _monthlyHours = 0.0;
   @override
   void initState() {
     super.initState();
     _getCheckInInfo();
+    _loadBreakAndMonthlyData();
   }
 
   void _getCheckInInfo() async {
@@ -34,6 +39,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       isCheckedIn = checked;
       checkInTimestamp = checkInIso != null && checked ? DateTime.tryParse(checkInIso) : null;
     });
+    _loadBreakAndMonthlyData();
   }
 
   @override
@@ -161,7 +167,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         SizedBox(width: 14),
                         FittedBox(
                           fit: BoxFit.scaleDown,
-                          child: _LiveWorkTimerBig(checkIn: checkInTimestamp!),
+                          child: _LiveWorkTimerBig(checkIn: checkInTimestamp!, userId: userId ?? ''),
                         ),
                       ],
                     ),
@@ -179,7 +185,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 SizedBox(width: 10),
                 Expanded(
-                  child: _buildStatCard('Tasks Pending', '0', Icons.assignment, Colors.orange),
+                  child: _buildStatCard('Breaks Today', _liveBreaksTodayString(), Icons.coffee, Colors.brown),
                 ),
               ],
             ),
@@ -187,11 +193,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Row(
               children: [
                 Expanded(
-                  child: _buildStatCard('This Month', '160h', Icons.calendar_month, Colors.blue),
+                  child: _buildStatCard('Attendance Status', _attendanceStatusString(), Icons.person, Colors.purple),
                 ),
                 SizedBox(width: 10),
                 Expanded(
-                  child: _buildStatCard('Leave Balance', '12', Icons.beach_access, Colors.purple),
+                  child: _buildStatCard('Monthly Worked Hours', _liveMonthlyWorkedHoursString(), Icons.calendar_month, Colors.blue),
                 ),
               ],
             ),
@@ -418,17 +424,68 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final s = two(d.inSeconds.remainder(60));
     return '$h:$m:$s';
   }
+
+  Future<void> _loadBreakAndMonthlyData() async {
+    if (userId == null) return;
+    final dateKey = DateFormat('yyyyMMdd').format(DateTime.now());
+    final monthKey = DateFormat('yyyyMM').format(DateTime.now());
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Load break data (using same keys as attendance_screen)
+    final breakAcc = prefs.getInt('break_acc_${userId}_$dateKey') ?? 0;
+    final breakStartIso = prefs.getString('break_start_${userId}_$dateKey');
+    int currentBreak = 0;
+    if (breakStartIso != null && breakStartIso.isNotEmpty) {
+      final start = DateTime.tryParse(breakStartIso);
+      if (start != null) {
+        currentBreak = DateTime.now().difference(start).inMinutes;
+      }
+    }
+    
+    // Load monthly hours from attendance records
+    await LocalStorageService.init();
+    final records = LocalStorageService.getAttendance(userId!);
+    double totalHours = 0;
+    for (final r in records) {
+      if (r.date.startsWith(monthKey)) {
+        totalHours += r.hours;
+      }
+    }
+    
+    setState(() {
+      _breakMinutesToday = (breakAcc / 60000).round() + currentBreak;
+      _monthlyHours = totalHours;
+    });
+  }
+  
+  String _liveBreaksTodayString() {
+    return '$_breakMinutesToday mins';
+  }
+
+  String _attendanceStatusString() {
+    if (isCheckedIn && checkInTimestamp != null) {
+      return 'Checked In';
+    } else {
+      return 'Not Checked In';
+    }
+  }
+
+  String _liveMonthlyWorkedHoursString() {
+    return '${_monthlyHours.toStringAsFixed(1)}h';
+  }
 }
 
 class _LiveWorkTimer extends StatefulWidget {
   final DateTime checkIn;
-  const _LiveWorkTimer({required this.checkIn});
+  final String userId;
+  const _LiveWorkTimer({required this.checkIn, required this.userId});
   @override
   State<_LiveWorkTimer> createState() => _LiveWorkTimerState();
 }
 
 class _LiveWorkTimerState extends State<_LiveWorkTimer> {
   late Duration duration;
+  int _breakMs = 0;
   late DateTime _now;
   @override
   void initState() {
@@ -441,12 +498,27 @@ class _LiveWorkTimerState extends State<_LiveWorkTimer> {
     Future.doWhile(() async {
       await Future.delayed(Duration(seconds: 1));
       if (!mounted) return false;
+      await _loadBreakMs();
       setState(() {
         _now = DateTime.now();
-        duration = _now.difference(widget.checkIn);
+        final raw = _now.difference(widget.checkIn);
+        final worked = raw.inMilliseconds - _breakMs;
+        duration = Duration(milliseconds: worked < 0 ? 0 : worked);
       });
       return mounted;
     });
+  }
+  Future<void> _loadBreakMs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final dateKey = DateFormat('yyyyMMdd').format(DateTime.now());
+    final acc = prefs.getInt('break_acc_${widget.userId}_$dateKey') ?? 0;
+    final startIso = prefs.getString('break_start_${widget.userId}_$dateKey');
+    int running = 0;
+    if (startIso != null && startIso.isNotEmpty) {
+      final start = DateTime.tryParse(startIso);
+      if (start != null) running = DateTime.now().difference(start).inMilliseconds;
+    }
+    _breakMs = acc + running;
   }
   @override
   Widget build(BuildContext context) {
@@ -467,12 +539,14 @@ class _LiveWorkTimerState extends State<_LiveWorkTimer> {
 
 class _LiveWorkTimerText extends StatefulWidget {
   final DateTime checkIn;
-  const _LiveWorkTimerText({required this.checkIn});
+  final String userId;
+  const _LiveWorkTimerText({required this.checkIn, required this.userId});
   @override
   State<_LiveWorkTimerText> createState() => _LiveWorkTimerTextState();
 }
 class _LiveWorkTimerTextState extends State<_LiveWorkTimerText> {
   late Duration duration;
+  int _breakMs = 0;
   late DateTime _now;
   @override
   void initState() {
@@ -485,12 +559,27 @@ class _LiveWorkTimerTextState extends State<_LiveWorkTimerText> {
     Future.doWhile(() async {
       await Future.delayed(Duration(seconds: 1));
       if (!mounted) return false;
+      await _loadBreakMs();
       setState(() {
         _now = DateTime.now();
-        duration = _now.difference(widget.checkIn);
+        final raw = _now.difference(widget.checkIn);
+        final worked = raw.inMilliseconds - _breakMs;
+        duration = Duration(milliseconds: worked < 0 ? 0 : worked);
       });
       return mounted;
     });
+  }
+  Future<void> _loadBreakMs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final dateKey = DateFormat('yyyyMMdd').format(DateTime.now());
+    final acc = prefs.getInt('break_acc_${widget.userId}_$dateKey') ?? 0;
+    final startIso = prefs.getString('break_start_${widget.userId}_$dateKey');
+    int running = 0;
+    if (startIso != null && startIso.isNotEmpty) {
+      final start = DateTime.tryParse(startIso);
+      if (start != null) running = DateTime.now().difference(start).inMilliseconds;
+    }
+    _breakMs = acc + running;
   }
   @override
   Widget build(BuildContext context) {
@@ -504,12 +593,14 @@ class _LiveWorkTimerTextState extends State<_LiveWorkTimerText> {
 
 class _LiveWorkTimerBig extends StatefulWidget {
   final DateTime checkIn;
-  const _LiveWorkTimerBig({required this.checkIn});
+  final String userId;
+  const _LiveWorkTimerBig({required this.checkIn, required this.userId});
   @override
   State<_LiveWorkTimerBig> createState() => _LiveWorkTimerBigState();
 }
 class _LiveWorkTimerBigState extends State<_LiveWorkTimerBig> {
   late Duration duration;
+  int _breakMs = 0;
   late DateTime _now;
   @override
   void initState() {
@@ -522,12 +613,27 @@ class _LiveWorkTimerBigState extends State<_LiveWorkTimerBig> {
     Future.doWhile(() async {
       await Future.delayed(Duration(seconds: 1));
       if (!mounted) return false;
+      await _loadBreakMs();
       setState(() {
         _now = DateTime.now();
-        duration = _now.difference(widget.checkIn);
+        final raw = _now.difference(widget.checkIn);
+        final worked = raw.inMilliseconds - _breakMs;
+        duration = Duration(milliseconds: worked < 0 ? 0 : worked);
       });
       return mounted;
     });
+  }
+  Future<void> _loadBreakMs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final dateKey = DateFormat('yyyyMMdd').format(DateTime.now());
+    final acc = prefs.getInt('break_acc_${widget.userId}_$dateKey') ?? 0;
+    final startIso = prefs.getString('break_start_${widget.userId}_$dateKey');
+    int running = 0;
+    if (startIso != null && startIso.isNotEmpty) {
+      final start = DateTime.tryParse(startIso);
+      if (start != null) running = DateTime.now().difference(start).inMilliseconds;
+    }
+    _breakMs = acc + running;
   }
   @override
   Widget build(BuildContext context) {
