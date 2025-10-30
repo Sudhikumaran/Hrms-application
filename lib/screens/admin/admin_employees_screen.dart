@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
-import '../../utils/mock_data.dart';
+import '../../models/employee.dart';
+import '../../services/local_storage_service.dart';
 
 class AdminEmployeesScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final employees = MockData.employees;
+    final employees = LocalStorageService.getEmployees();
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
@@ -72,11 +73,84 @@ class AdminEmployeesScreen extends StatelessWidget {
                       ),
                     ),
                     isThreeLine: false,
+                    onTap: () => _openEdit(context, employee),
                   ),
                 );
               },
             ),
     );
   }
+
+  void _openEdit(BuildContext context, employee) {
+    final nameCtrl = TextEditingController(text: employee.name);
+    final roleCtrl = TextEditingController(text: employee.role);
+    final deptCtrl = TextEditingController(text: employee.department);
+    final shiftCtrl = TextEditingController(text: employee.shift);
+    final statusCtrl = TextEditingController(text: employee.status);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Edit Employee', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  SizedBox(height: 12),
+                  _tf('Name', nameCtrl),
+                  SizedBox(height: 8),
+                  _tf('Role', roleCtrl),
+                  SizedBox(height: 8),
+                  _tf('Department', deptCtrl),
+                  SizedBox(height: 8),
+                  _tf('Shift', shiftCtrl),
+                  SizedBox(height: 8),
+                  _tf('Status', statusCtrl),
+                  SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: ElevatedButton.icon(
+                      onPressed: () async {
+                        final updated = Employee(
+                          empId: employee.empId,
+                          name: nameCtrl.text.trim(),
+                          role: roleCtrl.text.trim(),
+                          department: deptCtrl.text.trim(),
+                          shift: shiftCtrl.text.trim(),
+                          status: statusCtrl.text.trim(),
+                          hourlyRate: employee.hourlyRate,
+                          location: employee.location,
+                        );
+                        await LocalStorageService.updateEmployee(updated);
+                        if (context.mounted) Navigator.pop(context);
+                      },
+                      icon: Icon(Icons.save),
+                      label: Text('Save'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _tf(String label, TextEditingController c) => TextField(
+        controller: c,
+        decoration: InputDecoration(
+          labelText: label,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+          filled: true,
+          fillColor: Colors.grey[50],
+        ),
+      );
 }
 

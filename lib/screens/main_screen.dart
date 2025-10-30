@@ -5,6 +5,7 @@ import 'dashboard_screen.dart';
 import 'attendance_screen.dart';
 import 'leave_screen.dart';
 import 'profile_screen.dart';
+import 'employee_analytics_screen.dart';
 
 class MainScreen extends StatefulWidget {
   @override
@@ -60,6 +61,7 @@ class _MainScreenState extends State<MainScreen> {
   final List<Widget> _screens = [
     DashboardScreen(),
     AttendanceScreen(),
+    EmployeeAnalyticsScreen(),
     LeaveScreen(),
     ProfileScreen(),
   ];
@@ -69,46 +71,27 @@ class _MainScreenState extends State<MainScreen> {
     if (currentUser == null) {
       return Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-
+    // Defensive clamp
+    final numTabs = _screens.length;
+    if (_currentIndex < 0 || _currentIndex >= numTabs) _currentIndex = 0;
     return Scaffold(
       body: _screens[_currentIndex],
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black12,
-              blurRadius: 10,
-              offset: Offset(0, -5),
-            ),
-          ],
-        ),
-        child: BottomNavigationBar(
-          type: BottomNavigationBarType.fixed,
-          currentIndex: _currentIndex,
-          onTap: (index) {
-            setState(() {
-              _currentIndex = index;
-            });
-          },
-          selectedItemColor: Color(0xFF1976D2),
-          unselectedItemColor: Colors.grey,
-          items: [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.dashboard),
-              label: 'Dashboard',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.access_time),
-              label: 'Attendance',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.calendar_today),
-              label: 'Leave',
-            ),
-            BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
-          ],
-        ),
+      bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed,
+        currentIndex: _currentIndex,
+        onTap: (index) {
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+        selectedItemColor: Color(0xFF1976D2),
+        items: [
+          BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: 'Dashboard'),
+          BottomNavigationBarItem(icon: Icon(Icons.access_time), label: 'Attendance'),
+          BottomNavigationBarItem(icon: Icon(Icons.bar_chart), label: 'Analytics'),
+          BottomNavigationBarItem(icon: Icon(Icons.calendar_today), label: 'Leave'),
+          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
+        ],
       ),
     );
   }

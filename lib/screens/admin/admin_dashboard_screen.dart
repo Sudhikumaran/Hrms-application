@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../../models/employee.dart';
+// removed unused import
 import '../../utils/mock_data.dart';
+import 'admin_employees_screen.dart';
+import 'admin_analytics_screen.dart';
+import 'admin_location_screen.dart';
 
 class AdminDashboardScreen extends StatelessWidget {
   @override
@@ -89,7 +92,11 @@ class AdminDashboardScreen extends StatelessWidget {
               'Manage employee details',
               Icons.people_outline,
               Colors.blue,
-              () {},
+              () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => AdminEmployeesScreen()),
+                );
+              },
             ),
             SizedBox(height: 12),
             _buildActionCard(
@@ -97,7 +104,11 @@ class AdminDashboardScreen extends StatelessWidget {
               'Daily attendance insights',
               Icons.analytics_outlined,
               Colors.green,
-              () {},
+              () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => AdminAnalyticsScreen()),
+                );
+              },
             ),
             SizedBox(height: 12),
             _buildActionCard(
@@ -105,7 +116,11 @@ class AdminDashboardScreen extends StatelessWidget {
               'Set office location',
               Icons.location_on,
               Colors.red,
-              () {},
+              () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => AdminLocationScreen()),
+                );
+              },
             ),
           ],
         ),

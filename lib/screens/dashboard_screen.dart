@@ -2,8 +2,39 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'attendance_screen.dart';
 import 'leave_screen.dart';
+import '../services/local_storage_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 
-class DashboardScreen extends StatelessWidget {
+class DashboardScreen extends StatefulWidget {
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  DateTime? checkInTimestamp;
+  bool isCheckedIn = false;
+  String? userId;
+  @override
+  void initState() {
+    super.initState();
+    _getCheckInInfo();
+  }
+
+  void _getCheckInInfo() async {
+    await LocalStorageService.init();
+    userId = LocalStorageService.getUserId();
+    if (userId == null) return;
+    final dateKey = DateFormat('yyyyMMdd').format(DateTime.now());
+    final prefs = await SharedPreferences.getInstance();
+    final checked = prefs.getBool('attendance_checked_in_${userId}_$dateKey') ?? false;
+    final checkInIso = prefs.getString('attendance_checkin_raw_${userId}_$dateKey');
+    setState(() {
+      isCheckedIn = checked;
+      checkInTimestamp = checkInIso != null && checked ? DateTime.tryParse(checkInIso) : null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -108,13 +139,42 @@ class DashboardScreen extends StatelessWidget {
                 ],
               ),
             ),
+            if (isCheckedIn && checkInTimestamp != null) ...[
+              SizedBox(height: 20),
+              Card(
+                color: Color(0xFF1565c0),
+                margin: EdgeInsets.zero,
+                elevation: 3,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 22, horizontal: 20),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Icon(Icons.timelapse, color: Colors.white, size: 28),
+                        SizedBox(width: 14),
+                        Text('Time Worked:', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                        SizedBox(width: 14),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: _LiveWorkTimerBig(checkIn: checkInTimestamp!),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
             SizedBox(height: 20),
 
             // Quick Stats
             Row(
               children: [
                 Expanded(
-                  child: _buildStatCard('Hours Today', '8.0', Icons.timer, Colors.green),
+                  child: _buildStatCard('Hours Today', _liveHoursTodayString(), Icons.timer, Colors.green),
                 ),
                 SizedBox(width: 10),
                 Expanded(
@@ -346,5 +406,134 @@ class DashboardScreen extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  String _liveHoursTodayString() {
+    if (!isCheckedIn || checkInTimestamp == null) return '--:--:--';
+    final d = DateTime.now().difference(checkInTimestamp!);
+    String two(int n) => n.toString().padLeft(2, '0');
+    final h = two(d.inHours);
+    final m = two(d.inMinutes.remainder(60));
+    final s = two(d.inSeconds.remainder(60));
+    return '$h:$m:$s';
+  }
+}
+
+class _LiveWorkTimer extends StatefulWidget {
+  final DateTime checkIn;
+  const _LiveWorkTimer({required this.checkIn});
+  @override
+  State<_LiveWorkTimer> createState() => _LiveWorkTimerState();
+}
+
+class _LiveWorkTimerState extends State<_LiveWorkTimer> {
+  late Duration duration;
+  late DateTime _now;
+  @override
+  void initState() {
+    super.initState();
+    _now = DateTime.now();
+    duration = _now.difference(widget.checkIn);
+    _startTimer();
+  }
+  void _startTimer() {
+    Future.doWhile(() async {
+      await Future.delayed(Duration(seconds: 1));
+      if (!mounted) return false;
+      setState(() {
+        _now = DateTime.now();
+        duration = _now.difference(widget.checkIn);
+      });
+      return mounted;
+    });
+  }
+  @override
+  Widget build(BuildContext context) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    final h = two(duration.inHours);
+    final m = two(duration.inMinutes.remainder(60));
+    final s = two(duration.inSeconds.remainder(60));
+    return Row(
+      children: [
+        Icon(Icons.timelapse, color: Colors.white, size: 18),
+        SizedBox(width: 6),
+        Text('Time Worked: ', style: TextStyle(color: Colors.white70)),
+        Text('$h:$m:$s', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 16)),
+      ],
+    );
+  }
+}
+
+class _LiveWorkTimerText extends StatefulWidget {
+  final DateTime checkIn;
+  const _LiveWorkTimerText({required this.checkIn});
+  @override
+  State<_LiveWorkTimerText> createState() => _LiveWorkTimerTextState();
+}
+class _LiveWorkTimerTextState extends State<_LiveWorkTimerText> {
+  late Duration duration;
+  late DateTime _now;
+  @override
+  void initState() {
+    super.initState();
+    _now = DateTime.now();
+    duration = _now.difference(widget.checkIn);
+    _startTimer();
+  }
+  void _startTimer() {
+    Future.doWhile(() async {
+      await Future.delayed(Duration(seconds: 1));
+      if (!mounted) return false;
+      setState(() {
+        _now = DateTime.now();
+        duration = _now.difference(widget.checkIn);
+      });
+      return mounted;
+    });
+  }
+  @override
+  Widget build(BuildContext context) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    final h = two(duration.inHours);
+    final m = two(duration.inMinutes.remainder(60));
+    final s = two(duration.inSeconds.remainder(60));
+    return Text('$h:$m:$s', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black, fontSize: 28));
+  }
+}
+
+class _LiveWorkTimerBig extends StatefulWidget {
+  final DateTime checkIn;
+  const _LiveWorkTimerBig({required this.checkIn});
+  @override
+  State<_LiveWorkTimerBig> createState() => _LiveWorkTimerBigState();
+}
+class _LiveWorkTimerBigState extends State<_LiveWorkTimerBig> {
+  late Duration duration;
+  late DateTime _now;
+  @override
+  void initState() {
+    super.initState();
+    _now = DateTime.now();
+    duration = _now.difference(widget.checkIn);
+    _startTimer();
+  }
+  void _startTimer() {
+    Future.doWhile(() async {
+      await Future.delayed(Duration(seconds: 1));
+      if (!mounted) return false;
+      setState(() {
+        _now = DateTime.now();
+        duration = _now.difference(widget.checkIn);
+      });
+      return mounted;
+    });
+  }
+  @override
+  Widget build(BuildContext context) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    final h = two(duration.inHours);
+    final m = two(duration.inMinutes.remainder(60));
+    final s = two(duration.inSeconds.remainder(60));
+    return Text('$h:$m:$s', style: TextStyle(fontWeight: FontWeight.w900, color: Colors.white, fontSize: 28, letterSpacing: 1));
   }
 }

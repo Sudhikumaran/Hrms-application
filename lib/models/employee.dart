@@ -6,7 +6,8 @@ class Employee {
   final String shift;
   final String status;
   final double hourlyRate;
-  final Location location;
+  final Location? location;
+  final String? email;
 
   Employee({
     required this.empId,
@@ -16,7 +17,8 @@ class Employee {
     required this.shift,
     required this.status,
     required this.hourlyRate,
-    required this.location,
+    this.location,
+    this.email,
   });
 
   Map<String, dynamic> toJson() => {
@@ -27,7 +29,8 @@ class Employee {
         'shift': shift,
         'status': status,
         'hourlyRate': hourlyRate,
-        'location': {'lat': location.lat, 'lng': location.lng},
+        'location': location == null ? null : {'lat': location!.lat, 'lng': location!.lng},
+        'email': email,
       };
 
   factory Employee.fromJson(Map<String, dynamic> json) => Employee(
@@ -38,10 +41,13 @@ class Employee {
         shift: json['shift'],
         status: json['status'],
         hourlyRate: (json['hourlyRate'] as num).toDouble(),
-        location: Location(
-          lat: json['location']['lat'],
-          lng: json['location']['lng'],
-        ),
+        location: json['location'] == null
+            ? null
+            : Location(
+                lat: json['location']['lat'],
+                lng: json['location']['lng'],
+              ),
+        email: json['email'],
       );
 }
 

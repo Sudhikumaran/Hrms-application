@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import '../../models/employee.dart';
 import '../../models/attendance_record.dart';
-import '../../utils/mock_data.dart';
 import '../../services/pdf_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
+import '../../services/local_storage_service.dart';
 
 class AdminAnalyticsScreen extends StatefulWidget {
   @override
@@ -15,40 +15,62 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
   String selectedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
   bool _isGeneratingPdf = false;
 
+  // Filters
+  String? _selectedDepartment;
+  String? _selectedShift;
+  String? _selectedRole;
+  static const _presetKey = 'admin_analytics_filter_preset';
+
+  List<Employee> get employees => LocalStorageService.getEmployees();
+  Map<String, List<AttendanceRecord>> get attendanceData => _getSavedAttendance();
+
+  Map<String, List<AttendanceRecord>> _getSavedAttendance() {
+    final Map<String, List<AttendanceRecord>> result = {};
+    for (final emp in employees) {
+      result[emp.empId] = LocalStorageService.getAttendance(emp.empId);
+    }
+    return result;
+  }
+
+  List<String> get _departments =>
+      employees.map((e) => e.department).toSet().toList()..sort();
+  List<String> get _shifts =>
+      employees.map((e) => e.shift).toSet().toList()..sort();
+  List<String> get _roles =>
+      employees.map((e) => e.role).toSet().toList()..sort();
+
+  List<Employee> _filteredEmployees() {
+    return employees.where((e) {
+      final depOk = _selectedDepartment == null || e.department == _selectedDepartment;
+      final shiftOk = _selectedShift == null || e.shift == _selectedShift;
+      final roleOk = _selectedRole == null || e.role == _selectedRole;
+      return depOk && shiftOk && roleOk;
+    }).toList();
+  }
+
   Map<String, dynamic> _calculateDailyStats() {
-    final employees = MockData.employees;
-    final attendanceData = MockData.attendanceData;
-    
-    int totalMembers = employees.length;
+    final filtered = _filteredEmployees();
+    final realAttendance = attendanceData;
+    int totalMembers = filtered.length;
     int present = 0;
     int absent = 0;
     int late = 0;
-
-    for (var employee in employees) {
+    for (var employee in filtered) {
       final empId = employee.empId;
-      final todayRecord = attendanceData[empId]?.firstWhere(
-        (r) => r.date == selectedDate,
-        orElse: () => AttendanceRecord(
-          date: selectedDate,
-          status: 'Absent',
-          hours: 0,
-          location: '',
-          method: '',
-        ),
-      );
-
+      final records = realAttendance[empId] ?? [];
+      AttendanceRecord? todayRecord;
+      try {
+        todayRecord = records.firstWhere((r) => r.date == selectedDate);
+      } catch(_) {
+        todayRecord = null;
+      }
       if (todayRecord == null || todayRecord.status == 'Absent' || todayRecord.checkIn == null) {
         absent++;
       } else {
         present++;
-        // Check if late (after 9:15 AM)
-        final checkInTime = todayRecord.checkIn ?? '';
-        if (_isLateCheckIn(checkInTime)) {
-          late++;
-        }
+        if (_isLateCheckIn(todayRecord.checkIn ?? '')) late++;
       }
     }
-
     return {
       'totalMembers': totalMembers,
       'present': present,
@@ -82,14 +104,51 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
     }
   }
 
+  Future<void> _savePreset() async {
+    final prefs = await SharedPreferences.getInstance();
+    final preset = {
+      'department': _selectedDepartment,
+      'shift': _selectedShift,
+      'role': _selectedRole,
+      'date': selectedDate,
+    };
+    await prefs.setString(_presetKey, preset.toString());
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Preset saved')),
+      );
+    }
+  }
+
+  Future<void> _loadPreset() async {
+    final prefs = await SharedPreferences.getInstance();
+    final str = prefs.getString(_presetKey);
+    if (str == null) return;
+    // Very small parser for the simple map string we saved
+    String? getValue(String key) {
+      final regex = RegExp('$key: (.*?)[,}]');
+      final m = regex.firstMatch(str);
+      if (m == null) return null;
+      final v = m.group(1);
+      if (v == 'null') return null;
+      return v;
+    }
+    setState(() {
+      _selectedDepartment = getValue('department');
+      _selectedShift = getValue('shift');
+      _selectedRole = getValue('role');
+      selectedDate = getValue('date') ?? selectedDate;
+    });
+  }
+
   Future<void> _downloadPDF() async {
     setState(() {
       _isGeneratingPdf = true;
     });
 
     try {
-      final employees = MockData.employees;
-      final attendanceData = MockData.attendanceData;
+      final employees = _filteredEmployees();
+      final attendanceData = this.attendanceData;
       await PdfService.generateAttendancePdf(employees, attendanceData, selectedDate);
       
       if (mounted) {
@@ -141,7 +200,7 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Date Display
+            // Filters + Date
             Container(
               width: double.infinity,
               padding: EdgeInsets.all(16),
@@ -156,34 +215,51 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
                   ),
                 ],
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'Selected Date',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Selected Date', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                          SizedBox(height: 4),
+                          Text(
+                            DateFormat('MMM dd, yyyy').format(DateTime.parse(selectedDate)),
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                        ],
                       ),
-                      SizedBox(height: 4),
-                      Text(
-                        DateFormat('MMM dd, yyyy').format(DateTime.parse(selectedDate)),
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+                      ElevatedButton.icon(
+                        onPressed: _selectDate,
+                        icon: Icon(Icons.edit),
+                        label: Text('Change'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Color(0xFF1976D2),
+                          foregroundColor: Colors.white,
                         ),
                       ),
                     ],
                   ),
-                  ElevatedButton.icon(
-                    onPressed: _selectDate,
-                    icon: Icon(Icons.edit),
-                    label: Text('Change'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Color(0xFF1976D2),
-                      foregroundColor: Colors.white,
-                    ),
+                  SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(child: _buildDropdown('Department', _departments, _selectedDepartment, (v){ setState(()=>_selectedDepartment=v); })),
+                      SizedBox(width: 8),
+                      Expanded(child: _buildDropdown('Shift', _shifts, _selectedShift, (v){ setState(()=>_selectedShift=v); })),
+                      SizedBox(width: 8),
+                      Expanded(child: _buildDropdown('Role', _roles, _selectedRole, (v){ setState(()=>_selectedRole=v); })),
+                    ],
+                  ),
+                  SizedBox(height: 12),
+                  Row(
+                    children: [
+                      OutlinedButton.icon(onPressed: _savePreset, icon: Icon(Icons.save), label: Text('Save preset')),
+                      SizedBox(width: 8),
+                      OutlinedButton.icon(onPressed: _loadPreset, icon: Icon(Icons.download), label: Text('Load preset')),
+                    ],
                   ),
                 ],
               ),
@@ -193,45 +269,17 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
             // Stats Cards
             Row(
               children: [
-                Expanded(
-                  child: _buildStatCard(
-                    'Total Members',
-                    stats['totalMembers'].toString(),
-                    Icons.people,
-                    Colors.blue,
-                  ),
-                ),
+                Expanded(child: _buildDrillCard('Total Members', stats['totalMembers'].toString(), Icons.people, Colors.blue, _drillTotal)),
                 SizedBox(width: 12),
-                Expanded(
-                  child: _buildStatCard(
-                    'Present',
-                    stats['present'].toString(),
-                    Icons.check_circle,
-                    Colors.green,
-                  ),
-                ),
+                Expanded(child: _buildDrillCard('Present', stats['present'].toString(), Icons.check_circle, Colors.green, _drillPresent)),
               ],
             ),
             SizedBox(height: 12),
             Row(
               children: [
-                Expanded(
-                  child: _buildStatCard(
-                    'Absent',
-                    stats['absent'].toString(),
-                    Icons.cancel,
-                    Colors.red,
-                  ),
-                ),
+                Expanded(child: _buildDrillCard('Absent', stats['absent'].toString(), Icons.cancel, Colors.red, _drillAbsent)),
                 SizedBox(width: 12),
-                Expanded(
-                  child: _buildStatCard(
-                    'Late',
-                    stats['late'].toString(),
-                    Icons.access_time,
-                    Colors.orange,
-                  ),
-                ),
+                Expanded(child: _buildDrillCard('Late', stats['late'].toString(), Icons.access_time, Colors.orange, _drillLate)),
               ],
             ),
             SizedBox(height: 30),
@@ -305,6 +353,102 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildDrillCard(String title, String value, IconData icon, Color color, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: _buildStatCard(title, value, icon, color),
+    );
+  }
+
+  Widget _buildDropdown(
+    String label,
+    List<String> options,
+    String? current,
+    ValueChanged<String?> onChanged,
+  ) {
+    return DropdownButtonFormField<String>(
+      value: current,
+      isExpanded: true,
+      decoration: InputDecoration(
+        labelText: label,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        filled: true,
+        fillColor: Colors.grey[50],
+      ),
+      items: [
+        const DropdownMenuItem<String>(value: null, child: Text('All')),
+        ...options.map((o) => DropdownMenuItem<String>(value: o, child: Text(o))).toList(),
+      ],
+      onChanged: onChanged,
+    );
+  }
+
+  // Drill-down handlers
+  void _drillTotal() => _showDrill('All Employees', _filteredEmployees());
+  void _drillPresent() => _showDrill('Present', _filteredEmployees().where((e){
+    final rec = attendanceData[e.empId]?.firstWhere(
+      (r)=> r.date==selectedDate,
+      orElse: ()=> AttendanceRecord(date:selectedDate,status:'Absent',hours:0,location:'',method:''),
+    );
+    return rec!=null && rec.checkIn!=null && rec.status!='Absent';
+  }).toList());
+  void _drillAbsent() => _showDrill('Absent', _filteredEmployees().where((e){
+    final rec = attendanceData[e.empId]?.firstWhere(
+      (r)=> r.date==selectedDate,
+      orElse: ()=> AttendanceRecord(date:selectedDate,status:'Absent',hours:0,location:'',method:''),
+    );
+    return rec==null || rec.checkIn==null || rec.status=='Absent';
+  }).toList());
+  void _drillLate() => _showDrill('Late', _filteredEmployees().where((e){
+    final rec = attendanceData[e.empId]?.firstWhere(
+      (r)=> r.date==selectedDate,
+      orElse: ()=> AttendanceRecord(date:selectedDate,status:'Absent',hours:0,location:'',method:''),
+    );
+    if(rec==null || rec.checkIn==null) return false;
+    return _isLateCheckIn(rec.checkIn!);
+  }).toList());
+
+  void _showDrill(String title, List<Employee> list) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context){
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    Text('Count: ${list.length}')
+                  ],
+                ),
+              ),
+              Divider(height: 1),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: list.length,
+                  itemBuilder: (context, i){
+                    final e = list[i];
+                    return ListTile(
+                      leading: CircleAvatar(child: Text(e.name.substring(0,2).toUpperCase())),
+                      title: Text(e.name),
+                      subtitle: Text('${e.empId} • ${e.department} • ${e.shift}'),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      }
     );
   }
 }

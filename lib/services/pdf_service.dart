@@ -129,7 +129,7 @@ class PdfService {
     try {
       final bytes = await pdf.save();
       await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => bytes);
-    } on MissingPluginException catch (e) {
+    } on MissingPluginException catch (_) {
       // Fallback: Save PDF to device and share it
       try {
         final bytes = await pdf.save();
@@ -143,7 +143,7 @@ class PdfService {
           subject: 'Attendance Report - $date',
           text: 'Daily Attendance Report for $date',
         );
-      } on MissingPluginException catch (shareError) {
+      } on MissingPluginException catch (_) {
         // Both plugins failed - provide detailed error message with bytes length
         final pdfBytes = await pdf.save();
         throw Exception(

@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../models/employee.dart';
 import '../../services/location_service.dart';
+import '../../services/local_storage_service.dart';
 
 class AdminLocationScreen extends StatefulWidget {
   @override
@@ -15,6 +16,11 @@ class _AdminLocationScreenState extends State<AdminLocationScreen> {
   Location? _currentOfficeLocation;
   bool _isLoading = false;
   bool _isLoadingGps = false;
+  // Policy
+  double _radius = LocalStorageService.getPolicySettings()['radius'] as double;
+  String _workStart = LocalStorageService.getPolicySettings()['workStart'] as String;
+  String _workEnd = LocalStorageService.getPolicySettings()['workEnd'] as String;
+  int _lateGrace = LocalStorageService.getPolicySettings()['lateGrace'] as int;
 
   @override
   void initState() {
@@ -211,6 +217,12 @@ class _AdminLocationScreenState extends State<AdminLocationScreen> {
             ),
             SizedBox(height: 20),
 
+            // Policy Settings
+            Text('Policy Settings', style: GoogleFonts.outfit(fontSize: 18, fontWeight: FontWeight.w600)),
+            SizedBox(height: 12),
+            _buildPolicyCard(),
+            SizedBox(height: 20),
+
             // Current Location Display
             if (_currentOfficeLocation != null) ...[
               Text(
@@ -362,6 +374,66 @@ class _AdminLocationScreenState extends State<AdminLocationScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildPolicyCard() {
+    return Container(
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Expanded(child: _numField('Radius (meters)', _radius.toStringAsFixed(0), (v){ _radius = double.tryParse(v) ?? _radius; })),
+            SizedBox(width: 8),
+            Expanded(child: _textField('Late grace (min)', _lateGrace.toString(), (v){ _lateGrace = int.tryParse(v) ?? _lateGrace; })),
+          ]),
+          SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: _textField('Work start (HH:mm)', _workStart, (v){ _workStart = v; })),
+            SizedBox(width: 8),
+            Expanded(child: _textField('Work end (HH:mm)', _workEnd, (v){ _workEnd = v; })),
+          ]),
+          SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: ElevatedButton.icon(
+              onPressed: () async {
+                await LocalStorageService.savePolicySettings(radiusMeters: _radius, workStart: _workStart, workEnd: _workEnd, lateGraceMinutes: _lateGrace);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Policy settings saved')));
+                }
+              },
+              icon: Icon(Icons.save),
+              label: Text('Save Policy'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _numField(String label, String initial, Function(String) onChanged) {
+    return TextFormField(
+      initialValue: initial,
+      keyboardType: TextInputType.numberWithOptions(decimal: true),
+      decoration: InputDecoration(labelText: label, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), filled: true, fillColor: Colors.grey[50]),
+      onChanged: onChanged,
+    );
+  }
+
+  Widget _textField(String label, String initial, Function(String) onChanged) {
+    return TextFormField(
+      initialValue: initial,
+      decoration: InputDecoration(labelText: label, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), filled: true, fillColor: Colors.grey[50]),
+      onChanged: onChanged,
     );
   }
 }
