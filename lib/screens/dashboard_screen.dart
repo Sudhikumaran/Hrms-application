@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
+import 'dart:async';
+
 import 'attendance_screen.dart';
 import 'leave_screen.dart';
 import '../services/local_storage_service.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:intl/intl.dart';
 import 'notifications_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -18,13 +20,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String? userId;
   String? _shiftLabel;
   Duration? _countdown;
-  int _breakMinutesToday = 0;
+  int _breakMsToday = 0;
   double _monthlyHours = 0.0;
+  Timer? _uiTicker;
   @override
   void initState() {
     super.initState();
     _getCheckInInfo();
     _loadBreakAndMonthlyData();
+    _startUiTicker();
   }
 
   void _getCheckInInfo() async {
@@ -40,6 +44,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       checkInTimestamp = checkInIso != null && checked ? DateTime.tryParse(checkInIso) : null;
     });
     _loadBreakAndMonthlyData();
+    _handleUiTicker();
   }
 
   @override
@@ -419,9 +424,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!isCheckedIn || checkInTimestamp == null) return '--:--:--';
     final d = DateTime.now().difference(checkInTimestamp!);
     String two(int n) => n.toString().padLeft(2, '0');
-    final h = two(d.inHours);
-    final m = two(d.inMinutes.remainder(60));
-    final s = two(d.inSeconds.remainder(60));
+    final workedMs = d.inMilliseconds - _breakMsToday;
+    final worked = Duration(milliseconds: workedMs < 0 ? 0 : workedMs);
+    final h = two(worked.inHours);
+    final m = two(worked.inMinutes.remainder(60));
+    final s = two(worked.inSeconds.remainder(60));
     return '$h:$m:$s';
   }
 
@@ -437,9 +444,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     int currentBreak = 0;
     if (breakStartIso != null && breakStartIso.isNotEmpty) {
       final start = DateTime.tryParse(breakStartIso);
-      if (start != null) {
-        currentBreak = DateTime.now().difference(start).inMinutes;
-      }
+      if (start != null) currentBreak = DateTime.now().difference(start).inMilliseconds;
     }
     
     // Load monthly hours from attendance records
@@ -453,13 +458,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
     
     setState(() {
-      _breakMinutesToday = (breakAcc / 60000).round() + currentBreak;
+      _breakMsToday = breakAcc + currentBreak;
       _monthlyHours = totalHours;
     });
   }
   
   String _liveBreaksTodayString() {
-    return '$_breakMinutesToday mins';
+    final totalSeconds = (_breakMsToday / 1000).floor();
+    final m = (totalSeconds ~/ 60).toString().padLeft(2, '0');
+    final s = (totalSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
   }
 
   String _attendanceStatusString() {
@@ -472,6 +480,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   String _liveMonthlyWorkedHoursString() {
     return '${_monthlyHours.toStringAsFixed(1)}h';
+  }
+
+  void _handleUiTicker() {
+    if (isCheckedIn && checkInTimestamp != null) {
+      _startUiTicker();
+    } else {
+      _uiTicker?.cancel();
+    }
+  }
+
+  void _startUiTicker() {
+    _uiTicker?.cancel();
+    _uiTicker = Timer.periodic(Duration(seconds: 1), (_) async {
+      if (!mounted) return;
+      if (!isCheckedIn || checkInTimestamp == null) {
+        _uiTicker?.cancel();
+        return;
+      }
+      await _loadBreakAndMonthlyData();
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _uiTicker?.cancel();
+    super.dispose();
   }
 }
 
