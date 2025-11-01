@@ -60,7 +60,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       final raw = prefs.getString('attendance_checkin_raw_${userId}_$_todayDate');
       _checkInRaw = raw != null ? DateTime.tryParse(raw) : null;
       _completedToday = prefs.getBool('attendance_completed_${userId}_$_todayDate') ?? false;
-      _lastCompletedDate = prefs.getString('attendance_last_completed_${userId}') ?? null;
+      _lastCompletedDate = prefs.getString('attendance_last_completed_${userId}');
     });
     // Restore WFH status from today's attendance record
     if (userId != null) {
@@ -117,7 +117,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         text = 'Your shift starts at ${DateFormat('hh:mm a').format(start)}. Time to check in.';
       } else if (diff < -15) {
         late = true;
-        text = 'You are ${(-diff)} min late. Please check in.';
+        text = 'You are ${-diff} min late. Please check in.';
       }
     }
     setState(() {

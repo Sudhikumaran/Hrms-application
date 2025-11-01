@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
 import '../models/leave_request.dart';
 import '../utils/mock_data.dart';
+import '../services/local_storage_service.dart';
 
 class LeaveScreen extends StatefulWidget {
   @override
@@ -31,6 +33,7 @@ class _LeaveScreenState extends State<LeaveScreen>
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _initializeLeaveRequests();
+    _selectedLeaveType = _leaveTypes.first;
   }
 
   @override
@@ -467,21 +470,88 @@ class _LeaveScreenState extends State<LeaveScreen>
     }
   }
 
-  void _selectDate(BuildContext context) async {
-    await showDatePicker(
+  Future<void> _pickFromDate(BuildContext context) async {
+    final selected = await showDatePicker(
       context: context,
-      initialDate: DateTime.now(),
+      initialDate: _fromDate ?? DateTime.now(),
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(Duration(days: 365)),
     );
+    if (selected != null) {
+      setState(() {
+        _fromDate = selected;
+        _fromDateController.text = DateFormat('dd-MM-yyyy').format(selected);
+        if (_toDate != null && _toDate!.isBefore(selected)) {
+          _toDate = selected;
+          _toDateController.text = DateFormat('dd-MM-yyyy').format(selected);
+        }
+      });
+    }
   }
 
-  void _submitLeaveRequest() {
+  Future<void> _pickToDate(BuildContext context) async {
+    final start = _fromDate ?? DateTime.now();
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: _toDate ?? start,
+      firstDate: start,
+      lastDate: DateTime.now().add(Duration(days: 365)),
+    );
+    if (selected != null) {
+      setState(() {
+        _toDate = selected;
+        _toDateController.text = DateFormat('dd-MM-yyyy').format(selected);
+      });
+    }
+  }
+
+  Future<void> _submitLeaveRequest() async {
+    if (_selectedLeaveType == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select leave type')));
+      return;
+    }
+    if (_fromDate == null || _toDate == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select both dates')));
+      return;
+    }
+    if (_toDate!.isBefore(_fromDate!)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('To Date must be after From Date')));
+      return;
+    }
+    final reason = _reasonController.text.trim();
+    if (reason.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter reason')));
+      return;
+    }
+
+    final empId = LocalStorageService.getUserId() ?? 'EMP001';
+    final request = LeaveRequest(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      empId: empId,
+      type: _selectedLeaveType!,
+      startDate: DateFormat('dd-MM-yyyy').format(_fromDate!),
+      endDate: DateFormat('dd-MM-yyyy').format(_toDate!),
+      reason: reason,
+      status: 'Pending',
+    );
+
+    leaveRequests.add(request);
+    await LocalStorageService.addLeaveRequest(request);
+
+    _fromDate = null;
+    _toDate = null;
+    _fromDateController.clear();
+    _toDateController.clear();
+    _reasonController.clear();
+
+    if (!mounted) return;
+    setState(() {});
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Leave request submitted successfully'),
-        backgroundColor: Colors.green,
-      ),
+      const SnackBar(content: Text('Leave request submitted successfully'), backgroundColor: Colors.green),
     );
   }
 }

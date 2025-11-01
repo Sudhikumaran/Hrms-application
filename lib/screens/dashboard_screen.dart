@@ -18,8 +18,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DateTime? checkInTimestamp;
   bool isCheckedIn = false;
   String? userId;
-  String? _shiftLabel;
-  Duration? _countdown;
   int _breakMsToday = 0;
   double _monthlyHours = 0.0;
   Timer? _uiTicker;
