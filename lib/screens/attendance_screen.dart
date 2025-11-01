@@ -483,7 +483,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                 displayStatus = 'Absent';
                             }
                             return _buildHistoryItem(
-                              date,
+                              displayDate,
                               '$checkIn - $checkOut',
                               '$hours hrs',
                               displayStatus,
@@ -1065,29 +1065,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   }
 
   Future<void> _startBreak() async {
-    if (_onBreak) return;
-    _onBreak = true;
-    _breakStart = DateTime.now();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('break_start_${userId}_$_todayDate', _breakStart!.toIso8601String());
-    _startBreakTicker();
-    setState(() {});
-  }
-
-  Future<void> _pauseBreak() async {
-    if (!_onBreak || _breakStart == null) return;
-    final now = DateTime.now();
-    _breakAccumulatedMs += now.difference(_breakStart!).inMilliseconds;
-    _onBreak = false;
-    _breakStart = null;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('break_start_${userId}_$_todayDate');
-    await prefs.setInt('break_acc_${userId}_$_todayDate', _breakAccumulatedMs);
-    _breakTicker?.cancel();
-    setState(() {});
-  }
-
-  Future<void> _resumeBreak() async {
     if (_onBreak) return;
     _onBreak = true;
     _breakStart = DateTime.now();

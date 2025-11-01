@@ -1,41 +1,84 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../models/employee.dart';
+import '../services/local_storage_service.dart';
 import '../utils/mock_data.dart';
 import 'login_screen.dart';
 
-class ProfileScreen extends StatelessWidget {
-  Employee get currentUser {
-    try {
-      if (MockData.employees.isNotEmpty) {
-        return MockData.employees.first;
-      } else {
-        return Employee(
-          empId: 'EMP001',
-          name: 'Sudhi Kumaran',
-          role: 'Frontend & Backend Developer',
-          department: 'Development',
-          shift: 'Morning',
-          status: 'Active',
-          hourlyRate: 200,
-          location: Location(lat: 11.1085, lng: 77.3411),
-        );
-      }
-    } catch (e) {
-      return Employee(
+class ProfileScreen extends StatefulWidget {
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  Employee? _currentUser;
+  double _totalHoursThisMonth = 0;
+  double _averageDailyHours = 0;
+  double _attendanceRate = 0;
+  int _wfhDays = 0;
+  bool _isLoading = true;
+
+  Employee get _fallbackUser => Employee(
         empId: 'EMP001',
         name: 'Sudhi Kumaran',
         role: 'Frontend & Backend Developer',
         department: 'Development',
-        shift: 'Morning',
+        shift: 'Morning (9:00 AM - 6:00 PM)',
         status: 'Active',
         hourlyRate: 200,
         location: Location(lat: 11.1085, lng: 77.3411),
+        email: 'sudhi@example.com',
       );
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    await LocalStorageService.init();
+    final userId = LocalStorageService.getUserId();
+    Employee? user;
+    if (userId != null) {
+      final employees = LocalStorageService.getEmployees();
+      if (employees.isNotEmpty) {
+        user = employees.firstWhere(
+          (e) => e.empId == userId,
+          orElse: () => employees.first,
+        );
+      }
     }
+    user ??= (MockData.employees.isNotEmpty ? MockData.employees.first : null) ?? _fallbackUser;
+
+    final records = LocalStorageService.getAttendance(userId ?? user.empId);
+    final now = DateTime.now();
+    final monthKey = DateFormat('yyyyMM').format(now);
+    final monthRecords = records.where((r) => (r.date ?? '').startsWith(monthKey)).toList();
+    double totalHours = monthRecords.fold(0, (sum, r) => sum + r.hours);
+    double averageDailyHours = monthRecords.isNotEmpty ? totalHours / monthRecords.length : 0;
+    final presentStatuses = {'PRESENT', 'WFH', 'LATE'};
+    final presentDays = monthRecords.where((r) => presentStatuses.contains((r.status ?? '').toUpperCase())).length;
+    final wfhDays = monthRecords.where((r) => (r.status ?? '').toUpperCase() == 'WFH').length;
+    final firstDay = DateTime(now.year, now.month, 1);
+    final daysElapsed = now.difference(firstDay).inDays + 1;
+    final attendanceRate = daysElapsed > 0 ? ((presentDays / daysElapsed) * 100).clamp(0, 100).toDouble() : 0.0;
+
+    setState(() {
+      _currentUser = user;
+      _totalHoursThisMonth = totalHours;
+      _averageDailyHours = averageDailyHours;
+      _attendanceRate = attendanceRate;
+      _wfhDays = wfhDays;
+      _isLoading = false;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final user = _currentUser ?? _fallbackUser;
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
@@ -43,134 +86,98 @@ class ProfileScreen extends StatelessWidget {
         backgroundColor: Color(0xFF1976D2),
         foregroundColor: Colors.white,
         elevation: 0,
-        actions: [IconButton(icon: Icon(Icons.edit), onPressed: () {})],
       ),
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            // Profile Header
-            Container(
-              width: double.infinity,
-              padding: EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Color(0xFF1976D2), Color(0xFF42A5F5)],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
-              ),
+      body: _isLoading
+          ? Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
               child: Column(
                 children: [
-                  CircleAvatar(
-                    radius: 50,
-                    backgroundColor: Colors.white,
-                    child: Text(
-                      currentUser.name.substring(0, 2),
-                      style: TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF1976D2),
-                      ),
-                    ),
-                  ),
-                  SizedBox(height: 16),
-                  Text(
-                    currentUser.name,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Text(
-                    currentUser.role,
-                    style: TextStyle(color: Colors.white70, fontSize: 16),
-                  ),
-                  SizedBox(height: 8),
                   Container(
-                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    width: double.infinity,
+                    padding: EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    child: Text(
-                      currentUser.empId,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
+                      gradient: LinearGradient(
+                        colors: [Color(0xFF1976D2), Color(0xFF42A5F5)],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
                       ),
+                    ),
+                    child: Column(
+                      children: [
+                        CircleAvatar(
+                          radius: 50,
+                          backgroundColor: Colors.white,
+                          child: Text(
+                            user.name.isNotEmpty ? user.name.substring(0, 1) : user.empId.substring(0, 1),
+                            style: TextStyle(
+                              fontSize: 32,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1976D2),
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: 16),
+                        Text(
+                          user.name,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          user.role,
+                          style: TextStyle(color: Colors.white70, fontSize: 16),
+                        ),
+                        SizedBox(height: 8),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(15),
+                          ),
+                          child: Text(
+                            user.empId,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 20),
+                  Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Column(
+                      children: [
+                        _buildInfoSection('Personal Information', [
+                          _buildInfoItem('Department', user.department, Icons.business),
+                          _buildInfoItem('Shift', user.shift, Icons.schedule),
+                          _buildInfoItem('Status', user.status, Icons.verified_user),
+                          if (user.email != null)
+                            _buildInfoItem('Email', user.email!, Icons.email),
+                        ]),
+                        SizedBox(height: 20),
+                        _buildInfoSection('Work Statistics', [
+                          _buildInfoItem('Total Hours This Month', '${_totalHoursThisMonth.toStringAsFixed(1)} hrs', Icons.timer),
+                          _buildInfoItem('Average Daily Hours', '${_averageDailyHours.toStringAsFixed(1)} hrs', Icons.schedule),
+                          _buildInfoItem('WFH Days', '$_wfhDays', Icons.home_work),
+                          _buildInfoItem('Attendance Rate', '${_attendanceRate.toStringAsFixed(0)}%', Icons.trending_up),
+                        ]),
+                        SizedBox(height: 20),
+                        _buildInfoSection('Settings', [
+                          _buildActionItem('Change Password', Icons.lock, () => _showChangePasswordDialog(user)),
+                          _buildActionItem('Logout', Icons.logout, () => _showLogoutDialog(context)),
+                        ]),
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
-            SizedBox(height: 20),
-
-            // Profile Information
-            Padding(
-              padding: EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  _buildInfoSection('Personal Information', [
-                    _buildInfoItem(
-                      'Department',
-                      currentUser.department,
-                      Icons.business,
-                    ),
-                    _buildInfoItem('Shift', currentUser.shift, Icons.schedule),
-                    _buildInfoItem(
-                      'Status',
-                      currentUser.status,
-                      Icons.verified_user,
-                    ),
-                    _buildInfoItem(
-                      'Hourly Rate',
-                      '₹${currentUser.hourlyRate}',
-                      Icons.attach_money,
-                    ),
-                  ]),
-                  SizedBox(height: 20),
-                  _buildInfoSection('Work Statistics', [
-                    _buildInfoItem(
-                      'Total Hours This Month',
-                      '160 hrs',
-                      Icons.timer,
-                    ),
-                    _buildInfoItem(
-                      'Average Daily Hours',
-                      '8.0 hrs',
-                      Icons.schedule,
-                    ),
-                    _buildInfoItem('Tasks Completed', '15', Icons.task_alt),
-                    _buildInfoItem('Attendance Rate', '95%', Icons.trending_up),
-                  ]),
-                  SizedBox(height: 20),
-                  _buildInfoSection('Settings', [
-                    _buildActionItem('Change Password', Icons.lock, () {}),
-                    _buildActionItem(
-                      'Notification Settings',
-                      Icons.notifications,
-                      () {},
-                    ),
-                    _buildActionItem(
-                      'Privacy Settings',
-                      Icons.privacy_tip,
-                      () {},
-                    ),
-                    _buildActionItem('Help & Support', Icons.help, () {}),
-                    _buildActionItem(
-                      'Logout',
-                      Icons.logout,
-                      () => _showLogoutDialog(context),
-                    ),
-                  ]),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -195,11 +202,7 @@ class ProfileScreen extends StatelessWidget {
             padding: EdgeInsets.all(16),
             child: Text(
               title,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
             ),
           ),
           ...children,
@@ -216,18 +219,11 @@ class ProfileScreen extends StatelessWidget {
           Icon(icon, size: 20, color: Colors.grey[600]),
           SizedBox(width: 12),
           Expanded(
-            child: Text(
-              label,
-              style: TextStyle(color: Colors.grey[600], fontSize: 14),
-            ),
+            child: Text(label, style: TextStyle(color: Colors.grey[600], fontSize: 14)),
           ),
           Text(
             value,
-            style: TextStyle(
-              fontWeight: FontWeight.w500,
-              color: Colors.black87,
-              fontSize: 14,
-            ),
+            style: TextStyle(fontWeight: FontWeight.w500, color: Colors.black87, fontSize: 14),
           ),
         ],
       ),
@@ -244,18 +240,66 @@ class ProfileScreen extends StatelessWidget {
             Icon(icon, size: 20, color: Colors.grey[600]),
             SizedBox(width: 12),
             Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  color: Colors.black87,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
+              child: Text(label, style: TextStyle(color: Colors.black87, fontSize: 14, fontWeight: FontWeight.w500)),
             ),
             Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey[400]),
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _showChangePasswordDialog(Employee user) async {
+    final email = user.email;
+    final empId = user.empId;
+    if (email == null || email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Email not available for this user.')));
+      return;
+    }
+    final newController = TextEditingController();
+    final confirmController = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Change Password'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: newController,
+              obscureText: true,
+              decoration: InputDecoration(labelText: 'New Password'),
+            ),
+            TextField(
+              controller: confirmController,
+              obscureText: true,
+              decoration: InputDecoration(labelText: 'Confirm Password'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              final newPass = newController.text.trim();
+              final confirm = confirmController.text.trim();
+              if (newPass.length < 6) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Password must be at least 6 characters.')));
+                return;
+              }
+              if (newPass != confirm) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Passwords do not match.')));
+                return;
+              }
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setString('emp_login_email_$email', newPass);
+              await prefs.setString('emp_login_id_$empId', newPass);
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Password updated successfully.')));
+            },
+            child: Text('Update'),
+          ),
+        ],
       ),
     );
   }
@@ -267,10 +311,7 @@ class ProfileScreen extends StatelessWidget {
         title: Text('Logout'),
         content: Text('Are you sure you want to logout?'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
