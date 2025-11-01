@@ -34,6 +34,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   int _breakAccumulatedMs = 0;
   DateTime? _checkInRaw;
   Timer? _breakTicker;
+  bool _completedToday = false;
+  String? _lastCompletedDate;
 
   @override
   void initState() {
@@ -57,6 +59,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       checkInTime = prefs.getString('attendance_checkin_time_${userId}_$_todayDate');
       final raw = prefs.getString('attendance_checkin_raw_${userId}_$_todayDate');
       _checkInRaw = raw != null ? DateTime.tryParse(raw) : null;
+      _completedToday = prefs.getBool('attendance_completed_${userId}_$_todayDate') ?? false;
+      _lastCompletedDate = prefs.getString('attendance_last_completed_${userId}') ?? null;
     });
     // Restore WFH status from today's attendance record
     if (userId != null) {
@@ -601,6 +605,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     setState(() {
       isCheckedIn = true;
       checkInTime = TimeOfDay.now().format(context);
+      _completedToday = false;
     });
     _persistCheckInStatus(true, checkInTime);
     // Save attendance record (upsert) with WFH status when selected
@@ -617,6 +622,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         method: method,
       );
       LocalStorageService.upsertAttendance(empId, record);
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setBool('attendance_completed_${empId}_$today', false);
+        prefs.setString('attendance_last_completed_${empId}', today);
+        _lastCompletedDate = today;
+      });
     }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -629,6 +639,25 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   // Let user choose Office vs WFH on check-in
   void _chooseCheckInMode() {
+    final todayKey = _todayDate;
+    if (_lastCompletedDate != todayKey && _completedToday) {
+      setState(() {
+        _completedToday = false;
+      });
+    }
+    if (_completedToday && _lastCompletedDate == todayKey) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Already Checked Out'),
+          content: Text('You have already completed your shift today. Please check in on your next shift.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
     showModalBottomSheet(
       context: context,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
@@ -964,6 +993,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     setState(() {
       isCheckedIn = false;
       checkInTime = null;
+      _completedToday = true;
     });
     _persistCheckInStatus(false);
     // Update today's attendance record with checkout and hours
@@ -995,6 +1025,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           }
         });
       }
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setBool('attendance_completed_${empId}_$today', true);
+        prefs.setString('attendance_last_completed_${empId}', today);
+        _lastCompletedDate = today;
+      });
     }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
