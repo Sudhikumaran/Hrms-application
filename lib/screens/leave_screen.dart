@@ -20,7 +20,7 @@ class _LeaveScreenState extends State<LeaveScreen>
   final TextEditingController _toDateController = TextEditingController();
   final TextEditingController _reasonController = TextEditingController();
   String? _selectedLeaveType;
-  final _leaveTypes = [
+  final List<String> _leaveTypes = [
     'Annual Leave',
     'Sick Leave',
     'Casual Leave',
@@ -45,18 +45,16 @@ class _LeaveScreenState extends State<LeaveScreen>
     super.dispose();
   }
 
-  void _initializeLeaveRequests() {
-    try {
-      if (MockData.leaveRequests.isNotEmpty) {
-        setState(() {
-          leaveRequests = List.from(MockData.leaveRequests);
-        });
-      }
-    } catch (e) {
-      setState(() {
-        leaveRequests = [];
-      });
+  Future<void> _initializeLeaveRequests() async {
+    await LocalStorageService.init();
+    final stored = LocalStorageService.getLeaveRequests();
+    if (stored.isNotEmpty) {
+      leaveRequests = stored;
+    } else {
+      leaveRequests = List.from(MockData.leaveRequests);
+      await LocalStorageService.saveLeaveRequests(leaveRequests);
     }
+    setState(() {});
   }
 
   @override
@@ -529,6 +527,7 @@ class _LeaveScreenState extends State<LeaveScreen>
     }
 
     final empId = LocalStorageService.getUserId() ?? 'EMP001';
+    await LocalStorageService.init();
     final request = LeaveRequest(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       empId: empId,
@@ -540,7 +539,7 @@ class _LeaveScreenState extends State<LeaveScreen>
     );
 
     leaveRequests.add(request);
-    await LocalStorageService.addLeaveRequest(request);
+    await LocalStorageService.saveLeaveRequests(leaveRequests);
 
     _fromDate = null;
     _toDate = null;
