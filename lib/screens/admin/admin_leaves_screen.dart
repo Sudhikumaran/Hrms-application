@@ -16,8 +16,15 @@ class _AdminLeavesScreenState extends State<AdminLeavesScreen> {
   @override
   void initState() {
     super.initState();
+    _loadRequests();
+  }
+
+  Future<void> _loadRequests() async {
+    await LocalStorageService.init();
     final stored = LocalStorageService.getLeaveRequests();
-    _requests = stored.isNotEmpty ? stored : MockData.leaveRequests;
+    setState(() {
+      _requests = stored.isNotEmpty ? stored : List.from(MockData.leaveRequests);
+    });
   }
 
   void _toggleSelect(String id) {
