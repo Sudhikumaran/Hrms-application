@@ -447,11 +447,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           shrinkWrap: true,
                           physics: AlwaysScrollableScrollPhysics(),
                           children: records.map((r) {
-                            final date = r.date != null
-                                ? DateFormat('yyyyMMdd').tryParse(r.date!) != null
-                                    ? DateFormat('dd-MM-yyyy').format(DateFormat('yyyyMMdd').parse(r.date!))
-                                    : r.date!
-                                : '--';
+                            final date = r.date;
+                            String displayDate = '--';
+                            if (date != null && date.length == 8 && int.tryParse(date) != null) {
+                              displayDate = '${date.substring(6, 8)}-${date.substring(4, 6)}-${date.substring(0, 4)}';
+                            } else if (date != null) {
+                              displayDate = date;
+                            }
                             final checkIn = r.checkIn ?? '--:--';
                             final checkOut = r.checkOut ?? '--:--';
                             final hours = r.hours.toStringAsFixed(2);
