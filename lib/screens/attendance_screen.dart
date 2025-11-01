@@ -451,9 +451,34 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             final checkIn = r.checkIn ?? '--:--';
                             final checkOut = r.checkOut ?? '--:--';
                             final hours = r.hours.toStringAsFixed(2);
-                            final status = r.status ?? '--';
-                            final color = status == 'Present' ? Colors.green : Colors.red;
-                            return _buildHistoryItem(date, '$checkIn - $checkOut', '$hours hrs', status, color);
+                            final statusRaw = r.status ?? '--';
+                            final statusUpper = statusRaw.toUpperCase();
+                            Color color;
+                            String displayStatus;
+                            switch (statusUpper) {
+                              case 'PRESENT':
+                                color = Colors.green;
+                                displayStatus = 'Present';
+                                break;
+                              case 'LATE':
+                                color = Colors.orange;
+                                displayStatus = 'Late';
+                                break;
+                              case 'WFH':
+                                color = Colors.purple;
+                                displayStatus = 'WFH';
+                                break;
+                              default:
+                                color = Colors.red;
+                                displayStatus = 'Absent';
+                            }
+                            return _buildHistoryItem(
+                              date,
+                              '$checkIn - $checkOut',
+                              '$hours hrs',
+                              displayStatus,
+                              color,
+                            );
                           }).toList(),
                         ),
                 );
