@@ -59,9 +59,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       _checkInRaw = raw != null ? DateTime.tryParse(raw) : null;
     });
     // Restore WFH status from today's attendance record
-    final todayRecords = LocalStorageService.getAttendance(userId!).where((r) => r.date == _todayDate).toList();
-    if (todayRecords.isNotEmpty) {
-      _isWfh = (todayRecords.first.status ?? '').toUpperCase() == 'WFH';
+    if (userId != null) {
+      final todayRecords = LocalStorageService.getAttendance(userId!).where((r) => r.date == _todayDate).toList();
+      if (todayRecords.isNotEmpty) {
+        _isWfh = (todayRecords.first.status ?? '').toUpperCase() == 'WFH';
+      }
     }
     // Restore break state
     _breakAccumulatedMs = prefs.getInt('break_acc_${userId}_$_todayDate') ?? 0;
@@ -788,7 +790,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             onPressed: () {
               if (ctrl.text == otp) {
                 Navigator.pop(context);
-                _doCheckOut();
+                _handleCheckoutWarnings(_doCheckOut);
               } else {
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid OTP'), backgroundColor: Colors.red));
               }
@@ -834,7 +836,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             onPressed: () {
               if (ctrl.text == otp) {
                 Navigator.pop(context);
-                _doCheckOut();
+                _handleCheckoutWarnings(_doCheckOut);
               } else {
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid OTP'), backgroundColor: Colors.red));
               }
@@ -845,6 +847,86 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         ],
       ),
     );
+  }
+
+  void _handleCheckoutWarnings(VoidCallback onProceed) {
+    final shiftEnd = _getShiftEndDate();
+    if (shiftEnd == null) {
+      onProceed();
+      return;
+    }
+    final now = DateTime.now();
+    final earlyMinutes = shiftEnd.difference(now).inMinutes;
+    // early checkout if before shift end or if total worked < 7.5h (~450 min)
+    final totalWorked = _checkInRaw != null ? now.difference(_checkInRaw!).inMinutes : 0;
+    final isEarly = earlyMinutes > 0 || totalWorked < 450;
+    if (isEarly) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Early Checkout'),
+          content: Text('You are checking out early. Worked ${totalWorked} mins. Proceed?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel')),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                onProceed();
+              },
+              child: Text('Continue'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    final overtimeMinutes = now.difference(shiftEnd).inMinutes;
+    if (overtimeMinutes > 10) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Overtime'),
+          content: Text('Great work! You have worked $overtimeMinutes minutes overtime.'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                onProceed();
+              },
+              child: Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    onProceed();
+  }
+
+  DateTime? _getShiftEndDate() {
+    final shift = _employee?.shift ?? '';
+    final times = RegExp(r'(\d{1,2}:\d{2}\s?[AP]M)').allMatches(shift).map((m) => m.group(0)!).toList();
+    if (times.length < 2) {
+      // Default shift 9 AM - 6 PM
+      final today = DateTime.now();
+      return DateTime(today.year, today.month, today.day, 18, 0);
+    }
+    final today = DateTime.now();
+    final formatter = DateFormat('h:mm a');
+    DateTime start;
+    DateTime end;
+    try {
+      final parsedStart = formatter.parse(times[0]);
+      final parsedEnd = formatter.parse(times[1]);
+      start = DateTime(today.year, today.month, today.day, parsedStart.hour, parsedStart.minute);
+      end = DateTime(today.year, today.month, today.day, parsedEnd.hour, parsedEnd.minute);
+      if (!end.isAfter(start)) {
+        end = end.add(Duration(days: 1));
+      }
+    } catch (_) {
+      return DateTime(today.year, today.month, today.day, 18, 0);
+    }
+    return end;
   }
 
   void _doCheckOut() {
