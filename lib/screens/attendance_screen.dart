@@ -448,7 +448,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           physics: AlwaysScrollableScrollPhysics(),
                           children: records.map((r) {
                             final date = r.date != null
-                                ? DateFormat('dd-MM-yyyy').format(DateFormat('yyyyMMdd').parse(r.date!))
+                                ? DateFormat('yyyyMMdd').tryParse(r.date!) != null
+                                    ? DateFormat('dd-MM-yyyy').format(DateFormat('yyyyMMdd').parse(r.date!))
+                                    : r.date!
                                 : '--';
                             final checkIn = r.checkIn ?? '--:--';
                             final checkOut = r.checkOut ?? '--:--';
