@@ -424,8 +424,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!isCheckedIn || checkInTimestamp == null) return '--:--:--';
     final d = DateTime.now().difference(checkInTimestamp!);
     String two(int n) => n.toString().padLeft(2, '0');
-    final workedMs = d.inMilliseconds - _breakMsToday;
-    final worked = Duration(milliseconds: workedMs < 0 ? 0 : workedMs);
+    final safeBreak = _breakMsToday.isFinite ? _breakMsToday : 0;
+    final workedMs = d.inMilliseconds - safeBreak;
+    final clampedMs = workedMs.isFinite ? workedMs : 0;
+    final worked = Duration(milliseconds: clampedMs < 0 ? 0 : clampedMs.round());
     final h = two(worked.inHours);
     final m = two(worked.inMinutes.remainder(60));
     final s = two(worked.inSeconds.remainder(60));
@@ -457,14 +459,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     }
     
+    final combinedBreak = breakAcc + currentBreak;
+    final safeBreak = combinedBreak.isFinite ? combinedBreak : 0;
+    final safeHours = totalHours.isFinite ? totalHours : 0.0;
+
     setState(() {
-      _breakMsToday = breakAcc + currentBreak;
-      _monthlyHours = totalHours;
+      _breakMsToday = safeBreak < 0 ? 0 : safeBreak.round();
+      _monthlyHours = safeHours;
     });
   }
   
   String _liveBreaksTodayString() {
-    final totalSeconds = (_breakMsToday / 1000).floor();
+    final safeMs = _breakMsToday.isFinite ? _breakMsToday : 0;
+    final totalSeconds = (safeMs / 1000).floor();
     final m = (totalSeconds ~/ 60).toString().padLeft(2, '0');
     final s = (totalSeconds % 60).toString().padLeft(2, '0');
     return '$m:$s';
