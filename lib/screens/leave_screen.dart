@@ -12,6 +12,19 @@ class _LeaveScreenState extends State<LeaveScreen>
     with TickerProviderStateMixin {
   late TabController _tabController;
   List<LeaveRequest> leaveRequests = [];
+  DateTime? _fromDate;
+  DateTime? _toDate;
+  final TextEditingController _fromDateController = TextEditingController();
+  final TextEditingController _toDateController = TextEditingController();
+  final TextEditingController _reasonController = TextEditingController();
+  String? _selectedLeaveType;
+  final _leaveTypes = [
+    'Annual Leave',
+    'Sick Leave',
+    'Casual Leave',
+    'Emergency Leave',
+    'Maternity Leave',
+  ];
 
   @override
   void initState() {
@@ -23,6 +36,9 @@ class _LeaveScreenState extends State<LeaveScreen>
   @override
   void dispose() {
     _tabController.dispose();
+    _fromDateController.dispose();
+    _toDateController.dispose();
+    _reasonController.dispose();
     super.dispose();
   }
 
@@ -142,22 +158,17 @@ class _LeaveScreenState extends State<LeaveScreen>
                 ),
                 SizedBox(height: 20),
                 DropdownButtonFormField<String>(
+                  initialValue: _selectedLeaveType,
                   decoration: InputDecoration(
                     labelText: 'Leave Type',
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
                     ),
                   ),
-                  items: [
-                    'Sick Leave',
-                    'Casual Leave',
-                    'Annual Leave',
-                    'Emergency Leave',
-                    'Maternity Leave',
-                  ].map((type) {
-                    return DropdownMenuItem(value: type, child: Text(type));
-                  }).toList(),
-                  onChanged: (value) {},
+                  items: _leaveTypes
+                      .map((type) => DropdownMenuItem(value: type, child: Text(type)))
+                      .toList(),
+                  onChanged: (value) => setState(() => _selectedLeaveType = value),
                 ),
                 SizedBox(height: 16),
                 TextField(
@@ -168,8 +179,9 @@ class _LeaveScreenState extends State<LeaveScreen>
                     ),
                     suffixIcon: Icon(Icons.calendar_today),
                   ),
+                  controller: _fromDateController,
                   readOnly: true,
-                  onTap: () => _selectDate(context),
+                  onTap: () => _pickFromDate(context),
                 ),
                 SizedBox(height: 16),
                 TextField(
@@ -180,8 +192,9 @@ class _LeaveScreenState extends State<LeaveScreen>
                     ),
                     suffixIcon: Icon(Icons.calendar_today),
                   ),
+                  controller: _toDateController,
                   readOnly: true,
-                  onTap: () => _selectDate(context),
+                  onTap: () => _pickToDate(context),
                 ),
                 SizedBox(height: 16),
                 TextField(
@@ -191,6 +204,7 @@ class _LeaveScreenState extends State<LeaveScreen>
                       borderRadius: BorderRadius.circular(10),
                     ),
                   ),
+                  controller: _reasonController,
                   maxLines: 4,
                 ),
                 SizedBox(height: 20),
