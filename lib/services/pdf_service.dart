@@ -33,14 +33,9 @@ class PdfService {
                 method: '',
               ));
 
-      if (todayRecord == null || todayRecord.status == 'Absent' || todayRecord.checkIn == null) {
-        absentEmployees.add({
-          'name': employee.name,
-          'checkIn': '--:--',
-          'checkOut': '--:--',
-        });
-      } else {
-        final checkInTime = todayRecord.checkIn ?? '--:--';
+      // If employee checked in, they are present/WFH/Late (not absent)
+      if (todayRecord != null && todayRecord.checkIn != null && todayRecord.checkIn!.isNotEmpty) {
+        final checkInTime = todayRecord.checkIn!;
         // WFH handling
         if ((todayRecord.status ?? '').toString().toUpperCase() == 'WFH') {
           wfhEmployees.add({
@@ -50,8 +45,8 @@ class PdfService {
           });
           continue;
         }
-        // Consider late if check-in is after 9:15 AM
-        final isLate = _isLateCheckIn(checkInTime);
+        // Consider late based on shift
+        final isLate = _isLateCheckIn(checkInTime, employee.shift);
 
         if (isLate) {
           lateEmployees.add({
@@ -66,6 +61,13 @@ class PdfService {
             'checkOut': todayRecord.checkOut ?? '--:--',
           });
         }
+      } else {
+        // No check-in means absent
+        absentEmployees.add({
+          'name': employee.name,
+          'checkIn': '--:--',
+          'checkOut': '--:--',
+        });
       }
     }
 
@@ -233,13 +235,21 @@ class PdfService {
     );
   }
 
-  static bool _isLateCheckIn(String checkInTime) {
+  static bool _isLateCheckIn(String checkInTime, String shift) {
     try {
       final parts = checkInTime.split(':');
       final hour = int.parse(parts[0]);
       final minute = int.parse(parts[1]);
-      // Late if after 9:15 AM
-      return hour > 9 || (hour == 9 && minute > 15);
+      
+      // Determine late threshold based on shift
+      final shiftLower = shift.toLowerCase();
+      if (shiftLower.startsWith('night')) {
+        // Night shift: late if after 9:15 PM
+        return hour >= 21 && minute > 15;
+      } else {
+        // Morning shift: late if after 9:15 AM
+        return hour > 9 || (hour == 9 && minute > 15);
+      }
     } catch (e) {
       return false;
     }
