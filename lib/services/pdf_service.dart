@@ -28,9 +28,12 @@ class PdfService {
     // Organize employees by status and shift
     final List<Map<String, dynamic>> morningPresent = [];
     final List<Map<String, dynamic>> morningLate = [];
+    final List<Map<String, dynamic>> morningWfhPresent = [];
+    final List<Map<String, dynamic>> morningWfhLate = [];
     final List<Map<String, dynamic>> nightPresent = [];
     final List<Map<String, dynamic>> nightLate = [];
-    final List<Map<String, dynamic>> wfhEmployees = [];
+    final List<Map<String, dynamic>> nightWfhPresent = [];
+    final List<Map<String, dynamic>> nightWfhLate = [];
     final List<Map<String, dynamic>> absentEmployees = [];
 
     for (var employee in employees) {
@@ -47,48 +50,77 @@ class PdfService {
       // If employee checked in, they are present/WFH/Late (not absent)
       if (todayRecord != null && todayRecord.checkIn != null && todayRecord.checkIn!.isNotEmpty) {
         final checkInTime = todayRecord.checkIn!;
-        // WFH handling
-        if ((todayRecord.status ?? '').toString().toUpperCase() == 'WFH') {
-          wfhEmployees.add({
-            'name': employee.name,
-            'checkIn': checkInTime,
-            'checkOut': todayRecord.checkOut ?? '--:--',
-          });
-          continue;
-        }
         // Consider late based on shift
         final isLate = _isLateCheckIn(checkInTime, employee.shift);
         final shiftLower = employee.shift.toLowerCase();
         final isNightShift = shiftLower.startsWith('night');
+        final isWfh = (todayRecord.status ?? '').toString().toUpperCase() == 'WFH';
 
         if (isNightShift) {
-          if (isLate) {
-            nightLate.add({
-              'name': employee.name,
-              'checkIn': checkInTime,
-              'checkOut': todayRecord.checkOut ?? '--:--',
-            });
+          // Night shift
+          if (isWfh) {
+            // Night WFH
+            if (isLate) {
+              nightWfhLate.add({
+                'name': employee.name,
+                'checkIn': checkInTime,
+                'checkOut': todayRecord.checkOut ?? '--:--',
+              });
+            } else {
+              nightWfhPresent.add({
+                'name': employee.name,
+                'checkIn': checkInTime,
+                'checkOut': todayRecord.checkOut ?? '--:--',
+              });
+            }
           } else {
-            nightPresent.add({
-              'name': employee.name,
-              'checkIn': checkInTime,
-              'checkOut': todayRecord.checkOut ?? '--:--',
-            });
+            // Night Office
+            if (isLate) {
+              nightLate.add({
+                'name': employee.name,
+                'checkIn': checkInTime,
+                'checkOut': todayRecord.checkOut ?? '--:--',
+              });
+            } else {
+              nightPresent.add({
+                'name': employee.name,
+                'checkIn': checkInTime,
+                'checkOut': todayRecord.checkOut ?? '--:--',
+              });
+            }
           }
         } else {
           // Morning shift
-          if (isLate) {
-            morningLate.add({
-              'name': employee.name,
-              'checkIn': checkInTime,
-              'checkOut': todayRecord.checkOut ?? '--:--',
-            });
+          if (isWfh) {
+            // Morning WFH
+            if (isLate) {
+              morningWfhLate.add({
+                'name': employee.name,
+                'checkIn': checkInTime,
+                'checkOut': todayRecord.checkOut ?? '--:--',
+              });
+            } else {
+              morningWfhPresent.add({
+                'name': employee.name,
+                'checkIn': checkInTime,
+                'checkOut': todayRecord.checkOut ?? '--:--',
+              });
+            }
           } else {
-            morningPresent.add({
-              'name': employee.name,
-              'checkIn': checkInTime,
-              'checkOut': todayRecord.checkOut ?? '--:--',
-            });
+            // Morning Office
+            if (isLate) {
+              morningLate.add({
+                'name': employee.name,
+                'checkIn': checkInTime,
+                'checkOut': todayRecord.checkOut ?? '--:--',
+              });
+            } else {
+              morningPresent.add({
+                'name': employee.name,
+                'checkIn': checkInTime,
+                'checkOut': todayRecord.checkOut ?? '--:--',
+              });
+            }
           }
         }
       } else {
@@ -133,7 +165,7 @@ class PdfService {
 
             // Morning Shift Section
             pw.Text(
-              '🌅 Morning Shift',
+              'Morning Shift',
               style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.blue700),
             ),
             pw.SizedBox(height: 10),
@@ -157,13 +189,33 @@ class PdfService {
               _buildTable(['Employee Name', 'Check-in Time', 'Check-out Time'], morningLate),
               pw.SizedBox(height: 15),
             ],
-            if (morningPresent.isEmpty && morningLate.isEmpty)
+            // Morning WFH Present
+            if (morningWfhPresent.isNotEmpty) ...[
+              pw.Text(
+                'WFH Present (${morningWfhPresent.length})',
+                style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: PdfColors.teal700),
+              ),
+              pw.SizedBox(height: 8),
+              _buildTable(['Employee Name', 'Check-in Time', 'Check-out Time'], morningWfhPresent),
+              pw.SizedBox(height: 15),
+            ],
+            // Morning WFH Late
+            if (morningWfhLate.isNotEmpty) ...[
+              pw.Text(
+                'WFH Late (${morningWfhLate.length})',
+                style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: PdfColors.deepOrange700),
+              ),
+              pw.SizedBox(height: 8),
+              _buildTable(['Employee Name', 'Check-in Time', 'Check-out Time'], morningWfhLate),
+              pw.SizedBox(height: 15),
+            ],
+            if (morningPresent.isEmpty && morningLate.isEmpty && morningWfhPresent.isEmpty && morningWfhLate.isEmpty)
               pw.Text('No Morning Shift attendance data', style: pw.TextStyle(fontStyle: pw.FontStyle.italic)),
             pw.SizedBox(height: 20),
 
             // Night Shift Section
             pw.Text(
-              '🌙 Night Shift',
+              'Night Shift',
               style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.indigo700),
             ),
             pw.SizedBox(height: 10),
@@ -187,25 +239,34 @@ class PdfService {
               _buildTable(['Employee Name', 'Check-in Time', 'Check-out Time'], nightLate),
               pw.SizedBox(height: 15),
             ],
-            if (nightPresent.isEmpty && nightLate.isEmpty)
+            // Night WFH Present
+            if (nightWfhPresent.isNotEmpty) ...[
+              pw.Text(
+                'WFH Present (${nightWfhPresent.length})',
+                style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: PdfColors.teal700),
+              ),
+              pw.SizedBox(height: 8),
+              _buildTable(['Employee Name', 'Check-in Time', 'Check-out Time'], nightWfhPresent),
+              pw.SizedBox(height: 15),
+            ],
+            // Night WFH Late
+            if (nightWfhLate.isNotEmpty) ...[
+              pw.Text(
+                'WFH Late (${nightWfhLate.length})',
+                style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: PdfColors.deepOrange700),
+              ),
+              pw.SizedBox(height: 8),
+              _buildTable(['Employee Name', 'Check-in Time', 'Check-out Time'], nightWfhLate),
+              pw.SizedBox(height: 15),
+            ],
+            if (nightPresent.isEmpty && nightLate.isEmpty && nightWfhPresent.isEmpty && nightWfhLate.isEmpty)
               pw.Text('No Night Shift attendance data', style: pw.TextStyle(fontStyle: pw.FontStyle.italic)),
             pw.SizedBox(height: 20),
-
-            // WFH Employees Section
-            if (wfhEmployees.isNotEmpty) ...[
-              pw.Text(
-                '🏠 Working From Home (${wfhEmployees.length})',
-                style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.blueGrey800),
-              ),
-              pw.SizedBox(height: 10),
-              _buildTable(['Employee Name', 'Check-in Time', 'Check-out Time'], wfhEmployees),
-              pw.SizedBox(height: 20),
-            ],
 
             // Absent Employees Section (Morning shift only)
             if (absentEmployees.isNotEmpty) ...[
               pw.Text(
-                '❌ Absent Employees (${absentEmployees.length})',
+                'Absent Employees (${absentEmployees.length})',
                 style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.red700),
               ),
               pw.SizedBox(height: 10),
@@ -216,7 +277,7 @@ class PdfService {
             // Summary
             pw.Divider(),
             pw.Text(
-              'Summary: Total: ${employees.length} | Morning: Present ${morningPresent.length}, Late ${morningLate.length} | Night: Present ${nightPresent.length}, Late ${nightLate.length} | WFH: ${wfhEmployees.length} | Absent: ${absentEmployees.length}',
+              'Summary: Total: ${employees.length} | Morning: Present ${morningPresent.length}, Late ${morningLate.length}, WFH Present ${morningWfhPresent.length}, WFH Late ${morningWfhLate.length} | Night: Present ${nightPresent.length}, Late ${nightLate.length}, WFH Present ${nightWfhPresent.length}, WFH Late ${nightWfhLate.length} | Absent: ${absentEmployees.length}',
               style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
             ),
           ];
