@@ -67,11 +67,10 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
       }
       // If employee checked in, they are present/WFH/Late (not absent)
       if (todayRecord != null && todayRecord.checkIn != null && todayRecord.checkIn!.isNotEmpty) {
-        // WFH is not counted in present/late/absent (handled separately if needed)
-        final statusUpper = (todayRecord.status ?? '').toUpperCase();
-        if (statusUpper != 'WFH') {
-          present++;
-          if (_isLateCheckIn(todayRecord.checkIn!)) late++;
+        present++;
+        // Check if late based on shift
+        if (_isLateCheckIn(todayRecord.checkIn!, employee.shift)) {
+          late++;
         }
       } else {
         absent++;
@@ -85,13 +84,21 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
     };
   }
 
-  bool _isLateCheckIn(String checkInTime) {
+  bool _isLateCheckIn(String checkInTime, String shift) {
     try {
       final parts = checkInTime.split(':');
       final hour = int.parse(parts[0]);
       final minute = int.parse(parts[1]);
-      // Late if check-in after 9:10 AM (will be enhanced with shift-based logic later)
-      return hour > 9 || (hour == 9 && minute > 10);
+      
+      // Determine late threshold based on shift: late if check-in after 9:10 AM/PM
+      final shiftLower = shift.toLowerCase();
+      if (shiftLower.startsWith('night')) {
+        // Night shift: late if after 9:10 PM
+        return hour >= 21 && minute > 10;
+      } else {
+        // Morning shift: late if after 9:10 AM
+        return hour > 9 || (hour == 9 && minute > 10);
+      }
     } catch (e) {
       return false;
     }
@@ -403,7 +410,7 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
       (r)=> r.date==_internalDateKey,
       orElse: ()=> AttendanceRecord(date:_internalDateKey,status:'Absent',hours:0,location:'',method:''),
     );
-    return rec!=null && rec.checkIn!=null && rec.checkIn!.isNotEmpty && (rec.status??'').toUpperCase()!='WFH';
+    return rec!=null && rec.checkIn!=null && rec.checkIn!.isNotEmpty;
   }).toList());
   void _drillAbsent() => _showDrill('Absent', _filteredEmployees().where((e){
     final rec = attendanceData[e.empId]?.firstWhere(
@@ -418,7 +425,7 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
       orElse: ()=> AttendanceRecord(date:_internalDateKey,status:'Absent',hours:0,location:'',method:''),
     );
     if(rec==null || rec.checkIn==null || rec.checkIn!.isEmpty) return false;
-    return _isLateCheckIn(rec.checkIn!);
+    return _isLateCheckIn(rec.checkIn!, e.shift);
   }).toList());
 
   void _showDrill(String title, List<Employee> list) {

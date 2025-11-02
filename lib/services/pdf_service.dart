@@ -35,6 +35,7 @@ class PdfService {
     final List<Map<String, dynamic>> nightWfhPresent = [];
     final List<Map<String, dynamic>> nightWfhLate = [];
     final List<Map<String, dynamic>> absentEmployees = [];
+    final List<Map<String, dynamic>> nightNotCheckedIn = [];
 
     for (var employee in employees) {
       final empId = employee.empId;
@@ -124,10 +125,16 @@ class PdfService {
           }
         }
       } else {
-        // No check-in means absent (only show for non-night shifts during day)
+        // No check-in means absent
         final shiftLower = employee.shift.toLowerCase();
         final isNightShift = shiftLower.startsWith('night');
-        if (!isNightShift) {
+        if (isNightShift) {
+          nightNotCheckedIn.add({
+            'name': employee.name,
+            'checkIn': '--:--',
+            'checkOut': '--:--',
+          });
+        } else {
           absentEmployees.add({
             'name': employee.name,
             'checkIn': '--:--',
@@ -259,7 +266,17 @@ class PdfService {
               _buildTable(['Employee Name', 'Check-in Time', 'Check-out Time'], nightWfhLate),
               pw.SizedBox(height: 15),
             ],
-            if (nightPresent.isEmpty && nightLate.isEmpty && nightWfhPresent.isEmpty && nightWfhLate.isEmpty)
+            // Night Not Checked In
+            if (nightNotCheckedIn.isNotEmpty) ...[
+              pw.Text(
+                'Not Checked In (${nightNotCheckedIn.length})',
+                style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700),
+              ),
+              pw.SizedBox(height: 8),
+              _buildTable(['Employee Name', 'Check-in Time', 'Check-out Time'], nightNotCheckedIn),
+              pw.SizedBox(height: 15),
+            ],
+            if (nightPresent.isEmpty && nightLate.isEmpty && nightWfhPresent.isEmpty && nightWfhLate.isEmpty && nightNotCheckedIn.isEmpty)
               pw.Text('No Night Shift attendance data', style: pw.TextStyle(fontStyle: pw.FontStyle.italic)),
             pw.SizedBox(height: 20),
 
@@ -277,7 +294,7 @@ class PdfService {
             // Summary
             pw.Divider(),
             pw.Text(
-              'Summary: Total: ${employees.length} | Morning: Present ${morningPresent.length}, Late ${morningLate.length}, WFH Present ${morningWfhPresent.length}, WFH Late ${morningWfhLate.length} | Night: Present ${nightPresent.length}, Late ${nightLate.length}, WFH Present ${nightWfhPresent.length}, WFH Late ${nightWfhLate.length} | Absent: ${absentEmployees.length}',
+              'Summary: Total: ${employees.length} | Morning: Present ${morningPresent.length}, Late ${morningLate.length}, WFH Present ${morningWfhPresent.length}, WFH Late ${morningWfhLate.length}, Absent ${absentEmployees.length} | Night: Present ${nightPresent.length}, Late ${nightLate.length}, WFH Present ${nightWfhPresent.length}, WFH Late ${nightWfhLate.length}, Not Checked In ${nightNotCheckedIn.length}',
               style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
             ),
           ];
