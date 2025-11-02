@@ -1,17 +1,35 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-// removed unused import
-import '../../utils/mock_data.dart';
+import '../../services/local_storage_service.dart';
 import 'admin_employees_screen.dart';
 import 'admin_analytics_screen.dart';
 import 'admin_location_screen.dart';
 
-class AdminDashboardScreen extends StatelessWidget {
+class AdminDashboardScreen extends StatefulWidget {
+  @override
+  State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
+}
+
+class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  void _loadData() {
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
-    final employees = MockData.employees;
+    final employees = LocalStorageService.getEmployees();
     final totalMembers = employees.length;
     final activeMembers = employees.where((e) => e.status == 'Active').length;
+    
+    // Calculate unique departments and shifts
+    final departments = employees.map((e) => e.department).toSet().length;
+    final shifts = employees.map((e) => e.shift).toSet().length;
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
@@ -59,7 +77,7 @@ class AdminDashboardScreen extends StatelessWidget {
                 Expanded(
                   child: _buildStatCard(
                     'Departments',
-                    '3',
+                    departments.toString(),
                     Icons.business,
                     Colors.purple,
                   ),
@@ -68,7 +86,7 @@ class AdminDashboardScreen extends StatelessWidget {
                 Expanded(
                   child: _buildStatCard(
                     'Shifts',
-                    '2',
+                    shifts.toString(),
                     Icons.schedule,
                     Colors.orange,
                   ),
