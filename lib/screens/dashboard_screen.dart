@@ -7,6 +7,7 @@ import 'dart:async';
 import 'attendance_screen.dart';
 import 'leave_screen.dart';
 import '../services/local_storage_service.dart';
+import '../models/employee.dart';
 import 'notifications_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -18,6 +19,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DateTime? checkInTimestamp;
   bool isCheckedIn = false;
   String? userId;
+  String? _employeeName;
   int _breakMsToday = 0;
   double _monthlyHours = 0.0;
   Timer? _uiTicker;
@@ -33,6 +35,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await LocalStorageService.init();
     userId = LocalStorageService.getUserId();
     if (userId == null) return;
+    
+    // Load employee name
+    final employees = LocalStorageService.getEmployees();
+    if (employees.isNotEmpty) {
+      final employee = employees.firstWhere((e) => e.empId == userId, orElse: () => employees.first);
+      _employeeName = employee.name;
+    }
     final dateKey = DateFormat('yyyyMMdd').format(DateTime.now());
     final prefs = await SharedPreferences.getInstance();
     final checked = prefs.getBool('attendance_checked_in_${userId}_$dateKey') ?? false;
@@ -127,7 +136,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   SizedBox(height: 5),
                   Text(
-                    'Sudhi Kumaran',
+                    _employeeName ?? 'Employee',
                     style: GoogleFonts.outfit(
                       color: Colors.white70,
                       fontSize: 18,
@@ -141,7 +150,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       Icon(Icons.access_time, color: Colors.white, size: 16),
                       SizedBox(width: 5),
                       Text(
-                        'Friday, August 22, 2024',
+                        DateFormat('EEEE, MMMM d, yyyy').format(DateTime.now()),
                         style: TextStyle(color: Colors.white70, fontSize: 14),
                       ),
                     ],

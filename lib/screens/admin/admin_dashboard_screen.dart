@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../services/local_storage_service.dart';
+import '../login_screen.dart';
 import 'admin_employees_screen.dart';
 import 'admin_analytics_screen.dart';
 import 'admin_location_screen.dart';
@@ -140,8 +141,49 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 );
               },
             ),
+            SizedBox(height: 12),
+            _buildActionCard(
+              'Clear All Data',
+              'Remove all employees, attendance, and records',
+              Icons.delete_forever,
+              Colors.red[900]!,
+              () => _showClearDataDialog(context),
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showClearDataDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Clear All Data'),
+        content: Text('This will delete ALL employees, attendance records, leave requests, and other data. This action cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              await LocalStorageService.clearAll();
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('All data cleared. App will restart.')),
+              );
+              // Restart app by navigating back to login
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
+              );
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: Text('Clear All', style: TextStyle(color: Colors.white)),
+          ),
+        ],
       ),
     );
   }

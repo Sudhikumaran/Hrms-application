@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/employee.dart';
-import '../utils/mock_data.dart';
+import '../services/local_storage_service.dart';
 import 'dashboard_screen.dart';
 import 'attendance_screen.dart';
 import 'leave_screen.dart';
@@ -24,37 +24,14 @@ class _MainScreenState extends State<MainScreen> {
 
   void _initializeUser() {
     try {
-      if (MockData.employees.isNotEmpty) {
+      final employees = LocalStorageService.getEmployees();
+      if (employees.isNotEmpty) {
         setState(() {
-          currentUser = MockData.employees.first;
-        });
-      } else {
-        setState(() {
-          currentUser = Employee(
-            empId: 'EMP001',
-            name: 'Sudhi Kumaran',
-            role: 'Frontend & Backend Developer',
-            department: 'Development',
-            shift: 'Morning',
-            status: 'Active',
-            hourlyRate: 200,
-            location: Location(lat: 11.1085, lng: 77.3411),
-          );
+          currentUser = employees.first;
         });
       }
     } catch (e) {
-      setState(() {
-        currentUser = Employee(
-          empId: 'EMP001',
-          name: 'Sudhi Kumaran',
-          role: 'Frontend & Backend Developer',
-          department: 'Development',
-          shift: 'Morning',
-          status: 'Active',
-          hourlyRate: 200,
-          location: Location(lat: 11.1085, lng: 77.3411),
-        );
-      });
+      print('Error loading user: $e');
     }
   }
 

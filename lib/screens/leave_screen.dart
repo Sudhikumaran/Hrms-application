@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import '../models/leave_request.dart';
-import '../utils/mock_data.dart';
 import '../services/local_storage_service.dart';
 
 class LeaveScreen extends StatefulWidget {
@@ -51,8 +50,7 @@ class _LeaveScreenState extends State<LeaveScreen>
     if (stored.isNotEmpty) {
       leaveRequests = stored;
     } else {
-      leaveRequests = List.from(MockData.leaveRequests);
-      await LocalStorageService.saveLeaveRequests(leaveRequests);
+      leaveRequests = [];
     }
     setState(() {});
   }

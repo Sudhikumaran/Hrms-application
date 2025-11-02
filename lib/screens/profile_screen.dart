@@ -4,7 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/employee.dart';
 import '../services/local_storage_service.dart';
-import '../utils/mock_data.dart';
 import 'login_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -21,15 +20,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isLoading = true;
 
   Employee get _fallbackUser => Employee(
-        empId: 'EMP001',
-        name: 'Sudhi Kumaran',
-        role: 'Frontend & Backend Developer',
-        department: 'Development',
+        empId: 'DEMO',
+        name: 'Guest User',
+        role: 'Employee',
+        department: 'General',
         shift: 'Morning (9:00 AM - 6:00 PM)',
         status: 'Active',
-        hourlyRate: 200,
-        location: Location(lat: 11.1085, lng: 77.3411),
-        email: 'sudhi@example.com',
+        hourlyRate: 0,
+        location: null,
+        email: null,
       );
 
   @override
@@ -51,7 +50,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         );
       }
     }
-    user ??= (MockData.employees.isNotEmpty ? MockData.employees.first : null) ?? _fallbackUser;
+    user ??= _fallbackUser;
 
     final records = LocalStorageService.getAttendance(userId ?? user.empId);
     final now = DateTime.now();

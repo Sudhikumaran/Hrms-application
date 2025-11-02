@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../utils/mock_data.dart';
 import '../../services/local_storage_service.dart';
 
 class AdminShiftsScreen extends StatefulWidget {
@@ -32,7 +31,7 @@ class _AdminShiftsScreenState extends State<AdminShiftsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final employees = MockData.employees;
+    final employees = LocalStorageService.getEmployees();
     final shiftOptions = employees.map((e) => e.shift).toSet().toList();
     return Scaffold(
       backgroundColor: Colors.grey[50],
