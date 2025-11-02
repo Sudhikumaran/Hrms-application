@@ -13,6 +13,7 @@ class AdminAnalyticsScreen extends StatefulWidget {
 
 class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
   String selectedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
+  String _internalDateKey = DateFormat('yyyyMMdd').format(DateTime.now()); // For matching with attendance records
   bool _isGeneratingPdf = false;
 
   // Filters
@@ -60,15 +61,20 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
       final records = realAttendance[empId] ?? [];
       AttendanceRecord? todayRecord;
       try {
-        todayRecord = records.firstWhere((r) => r.date == selectedDate);
+        todayRecord = records.firstWhere((r) => r.date == _internalDateKey);
       } catch(_) {
         todayRecord = null;
       }
-      if (todayRecord == null || todayRecord.status == 'Absent' || todayRecord.checkIn == null) {
-        absent++;
+      // If employee checked in, they are present/WFH/Late (not absent)
+      if (todayRecord != null && todayRecord.checkIn != null && todayRecord.checkIn!.isNotEmpty) {
+        // WFH is not counted in present/late/absent (handled separately if needed)
+        final statusUpper = (todayRecord.status ?? '').toUpperCase();
+        if (statusUpper != 'WFH') {
+          present++;
+          if (_isLateCheckIn(todayRecord.checkIn!)) late++;
+        }
       } else {
-        present++;
-        if (_isLateCheckIn(todayRecord.checkIn ?? '')) late++;
+        absent++;
       }
     }
     return {
@@ -84,7 +90,8 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
       final parts = checkInTime.split(':');
       final hour = int.parse(parts[0]);
       final minute = int.parse(parts[1]);
-      return hour > 9 || (hour == 9 && minute > 15);
+      // Late if check-in after 9:10 AM (will be enhanced with shift-based logic later)
+      return hour > 9 || (hour == 9 && minute > 10);
     } catch (e) {
       return false;
     }
@@ -100,6 +107,7 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
     if (picked != null) {
       setState(() {
         selectedDate = DateFormat('yyyy-MM-dd').format(picked);
+        _internalDateKey = DateFormat('yyyyMMdd').format(picked); // Update internal key for matching
       });
     }
   }
@@ -149,7 +157,8 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
     try {
       final employees = _filteredEmployees();
       final attendanceData = this.attendanceData;
-      await PdfService.generateAttendancePdf(employees, attendanceData, selectedDate);
+      // Pass internal date key for matching with attendance records
+      await PdfService.generateAttendancePdf(employees, attendanceData, _internalDateKey);
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -391,24 +400,24 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
   void _drillTotal() => _showDrill('All Employees', _filteredEmployees());
   void _drillPresent() => _showDrill('Present', _filteredEmployees().where((e){
     final rec = attendanceData[e.empId]?.firstWhere(
-      (r)=> r.date==selectedDate,
-      orElse: ()=> AttendanceRecord(date:selectedDate,status:'Absent',hours:0,location:'',method:''),
+      (r)=> r.date==_internalDateKey,
+      orElse: ()=> AttendanceRecord(date:_internalDateKey,status:'Absent',hours:0,location:'',method:''),
     );
-    return rec!=null && rec.checkIn!=null && rec.status!='Absent';
+    return rec!=null && rec.checkIn!=null && rec.checkIn!.isNotEmpty && (rec.status??'').toUpperCase()!='WFH';
   }).toList());
   void _drillAbsent() => _showDrill('Absent', _filteredEmployees().where((e){
     final rec = attendanceData[e.empId]?.firstWhere(
-      (r)=> r.date==selectedDate,
-      orElse: ()=> AttendanceRecord(date:selectedDate,status:'Absent',hours:0,location:'',method:''),
+      (r)=> r.date==_internalDateKey,
+      orElse: ()=> AttendanceRecord(date:_internalDateKey,status:'Absent',hours:0,location:'',method:''),
     );
-    return rec==null || rec.checkIn==null || rec.status=='Absent';
+    return rec==null || rec.checkIn==null || rec.checkIn!.isEmpty;
   }).toList());
   void _drillLate() => _showDrill('Late', _filteredEmployees().where((e){
     final rec = attendanceData[e.empId]?.firstWhere(
-      (r)=> r.date==selectedDate,
-      orElse: ()=> AttendanceRecord(date:selectedDate,status:'Absent',hours:0,location:'',method:''),
+      (r)=> r.date==_internalDateKey,
+      orElse: ()=> AttendanceRecord(date:_internalDateKey,status:'Absent',hours:0,location:'',method:''),
     );
-    if(rec==null || rec.checkIn==null) return false;
+    if(rec==null || rec.checkIn==null || rec.checkIn!.isEmpty) return false;
     return _isLateCheckIn(rec.checkIn!);
   }).toList());
 

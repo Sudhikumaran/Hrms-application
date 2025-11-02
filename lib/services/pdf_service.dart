@@ -5,6 +5,7 @@ import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import '../models/employee.dart';
 import '../models/attendance_record.dart';
 
@@ -15,6 +16,14 @@ class PdfService {
     String date,
   ) async {
     final pdf = pw.Document();
+    // Convert internal date key (yyyyMMdd) to display format (yyyy-MM-dd) if needed
+    String displayDate = date;
+    if (date.length == 8 && int.tryParse(date) != null) {
+      try {
+        final parsed = DateTime.parse('${date.substring(0, 4)}-${date.substring(4, 6)}-${date.substring(6, 8)}');
+        displayDate = DateFormat('yyyy-MM-dd').format(parsed);
+      } catch (_) {}
+    }
 
     // Organize employees by status
     final List<Map<String, dynamic>> presentEmployees = [];
@@ -89,7 +98,7 @@ class PdfService {
                     style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold),
                   ),
                   pw.Text(
-                    'Date: $date',
+                    'Date: $displayDate',
                     style: pw.TextStyle(fontSize: 12),
                   ),
                 ],
@@ -157,14 +166,14 @@ class PdfService {
       try {
         final bytes = await pdf.save();
         final directory = await getApplicationDocumentsDirectory();
-        final file = await File('${directory.path}/attendance_report_$date.pdf').create(recursive: true);
+        final file = await File('${directory.path}/attendance_report_$displayDate.pdf').create(recursive: true);
         await file.writeAsBytes(bytes);
         
         // Share the PDF file
         await Share.shareXFiles(
           [XFile(file.path)],
-          subject: 'Attendance Report - $date',
-          text: 'Daily Attendance Report for $date',
+          subject: 'Attendance Report - $displayDate',
+          text: 'Daily Attendance Report for $displayDate',
         );
       } on MissingPluginException catch (_) {
         // Both plugins failed - provide detailed error message with bytes length
@@ -241,14 +250,14 @@ class PdfService {
       final hour = int.parse(parts[0]);
       final minute = int.parse(parts[1]);
       
-      // Determine late threshold based on shift
+      // Determine late threshold based on shift: late if check-in after 9:10 AM/PM
       final shiftLower = shift.toLowerCase();
       if (shiftLower.startsWith('night')) {
-        // Night shift: late if after 9:15 PM
-        return hour >= 21 && minute > 15;
+        // Night shift: late if after 9:10 PM
+        return hour >= 21 && minute > 10;
       } else {
-        // Morning shift: late if after 9:15 AM
-        return hour > 9 || (hour == 9 && minute > 15);
+        // Morning shift: late if after 9:10 AM
+        return hour > 9 || (hour == 9 && minute > 10);
       }
     } catch (e) {
       return false;
