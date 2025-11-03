@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/local_storage_service.dart';
+import '../services/firebase_service.dart';
+import '../services/hybrid_storage_service.dart';
+import '../utils/login_diagnostics.dart';
 import 'main_screen.dart';
 import 'admin_main_screen.dart';
+import 'create_admin_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/employee.dart';
 
@@ -31,41 +35,326 @@ class _LoginScreenState extends State<LoginScreen> {
         bool isValid = false;
         if (_selectedRole == 'Employee') {
           await LocalStorageService.init();
-          final employees = LocalStorageService.getEmployees();
+          // Ensure HybridStorageService is initialized
+          await HybridStorageService.init();
+          
+          // CRITICAL: Force sync employees from Firestore first (important after restart)
+          if (HybridStorageService.isOnline) {
+            print('🔄 Force syncing employees from Firestore before login...');
+            await HybridStorageService.refreshEmployeesFromFirestore();
+          }
+          
+          // Use Firebase Authentication for employee login (same as admin)
+          try {
+            print('🔐 Attempting employee login for: ${input.trim()}');
+            final result = await FirebaseService.signInEmployee(input, pwd);
+            print('📋 Employee login result: $result');
+            
+            if (result['success'] == true) {
+              print('✅ Login successful, navigating to main screen');
+              await LocalStorageService.saveUser(result['userId'] ?? input, 'Employee');
+              if (!mounted) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(builder: (context) => MainScreen()),
+              );
+              isValid = true;
+            } else {
+              print('❌ Login failed: ${result['message']}');
+              
+              // If result says to use fallback, don't show error yet
+              final useFallback = result['useFallback'] == true;
+              if (!useFallback) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(result['message'] ?? 'Invalid credentials'),
+                      backgroundColor: Colors.red,
+                      duration: Duration(seconds: 5),
+                    ),
+                  );
+                }
+              }
+            }
+          } catch (e, stackTrace) {
+            print('❌ Employee login exception: $e');
+            print('❌ Stack trace: $stackTrace');
+            // Continue to fallback
+          }
+          
+          // Fallback to old method if Firebase Auth fails (backward compatibility)
+          // Also use if result indicates useFallback
+          if (!isValid) {
+            print('⚠️ Firebase Auth failed, trying fallback method (local passwords)...');
+            
+            // Get employees - try Firestore first, then local
+            List<Employee> employees = [];
+            
+            // Try to get from Firestore if online
+            if (HybridStorageService.isOnline) {
+              try {
+                print('🌐 Online - refreshing employees from Firestore...');
+                employees = await HybridStorageService.refreshEmployeesFromFirestore();
+                print('✅ Refreshed: ${employees.length} employees from Firestore');
+              } catch (e) {
+                print('⚠️ Firestore refresh failed: $e, using local employees');
+                employees = HybridStorageService.getEmployees();
+              }
+            } else {
+              employees = HybridStorageService.getEmployees();
+              print('📱 Offline - using local employees: ${employees.length}');
+            }
+            
+            // If still no employees, try just local storage directly
+            if (employees.isEmpty) {
+              print('⚠️ No employees from Firestore, checking local storage...');
+              await LocalStorageService.init();
+              employees = LocalStorageService.getEmployees();
+              print('📱 Local storage has ${employees.length} employees');
+            }
+            
+            print('🔍 Login attempt - Total employees found: ${employees.length}');
+            print('🔍 Login attempt - Input: $input');
+          
           Employee? found;
           for (final e in employees) {
-            if (e.empId.toLowerCase() == input.toLowerCase() ||
-                (e.email != null && e.email!.toLowerCase() == input.toLowerCase())) {
+            final empIdMatch = e.empId.toLowerCase() == input.toLowerCase();
+            final emailMatch = e.email != null && e.email!.toLowerCase() == input.toLowerCase();
+            print('🔍 Checking employee: ${e.empId}, email: ${e.email}, empIdMatch: $empIdMatch, emailMatch: $emailMatch');
+            
+            if (empIdMatch || emailMatch) {
               found = e;
+              print('✅ Found employee: ${found.empId}, email: ${found.email}');
               break;
             }
           }
+          
           if (found != null) {
             final prefs = await SharedPreferences.getInstance();
-            final passEmail = prefs.getString('emp_login_email_${found.email}') ?? '';
-            final passId = prefs.getString('emp_login_id_${found.empId}') ?? '';
-            if (pwd == passEmail || pwd == passId) {
+            
+            // Collect ALL possible password keys for this employee
+            final allKeys = prefs.getKeys();
+            final List<String> passwordKeys = [];
+            final List<String> storedPasswords = [];
+            
+            // Standard keys
+            final emailKey = found.email != null ? 'emp_login_email_${found.email}' : '';
+            final idKey = 'emp_login_id_${found.empId}';
+            
+            passwordKeys.add(idKey);
+            if (emailKey.isNotEmpty) passwordKeys.add(emailKey);
+            
+            // Find ALL password keys that might match this employee
+            for (var key in allKeys) {
+              // Check emp_login_id keys
+              if (key.startsWith('emp_login_id_')) {
+                final keyEmpId = key.replaceFirst('emp_login_id_', '');
+                if (keyEmpId.toUpperCase() == found.empId.toUpperCase()) {
+                  if (!passwordKeys.contains(key)) {
+                    passwordKeys.add(key);
+                    print('🔍 Found additional ID key: $key');
+                  }
+                }
+              }
+              // Check emp_login_email keys
+              if (key.startsWith('emp_login_email_')) {
+                final keyEmail = key.replaceFirst('emp_login_email_', '');
+                // Case-insensitive match
+                if (found.email != null && keyEmail.toLowerCase().trim() == found.email!.toLowerCase().trim()) {
+                  if (!passwordKeys.contains(key)) {
+                    passwordKeys.add(key);
+                    print('🔍 Found additional email key: $key');
+                  }
+                }
+                // Also check if email in key matches any email format
+                if (found.email != null && keyEmail.contains(found.email!.split('@')[0])) {
+                  if (!passwordKeys.contains(key)) {
+                    passwordKeys.add(key);
+                    print('🔍 Found potential email key: $key');
+                  }
+                }
+              }
+            }
+            
+            print('🔐 Checking ${passwordKeys.length} password keys for employee ${found.empId}');
+            print('🔐 Keys: $passwordKeys');
+            
+            // Try all password keys
+            bool passwordMatch = false;
+            String? matchedKey;
+            
+            for (var key in passwordKeys) {
+              final storedPassword = prefs.getString(key);
+              if (storedPassword != null && storedPassword.isNotEmpty) {
+                storedPasswords.add(storedPassword);
+                print('🔐 Key "$key" has password: "${storedPassword.length > 0 ? "***${storedPassword.length} chars" : "(empty)"}"');
+                if (pwd == storedPassword) {
+                  passwordMatch = true;
+                  matchedKey = key;
+                  print('✅ Password match found on key: $key');
+                  break;
+                }
+              }
+            }
+            
+            print('🔐 Input password: "${pwd.length} chars"');
+            print('🔐 Total stored passwords checked: ${storedPasswords.length}');
+            
+            if (passwordMatch && matchedKey != null) {
+              print('✅ Password match on key "$matchedKey"! Logging in...');
+              
+              // Try to create Firebase Auth account for this employee if they don't have one
+              // This migrates old accounts to Firebase Auth automatically
+              if (found.email != null && found.email!.isNotEmpty) {
+                try {
+                  print('🔐 Attempting to create Firebase Auth account for ${found.email}...');
+                  final authResult = await FirebaseService.createEmployeeAccount(
+                    found.email!,
+                    pwd, // Use the password they just entered
+                    found.empId,
+                  );
+                  if (authResult['success'] == true) {
+                    print('✅ Firebase Auth account created for future logins');
+                  } else {
+                    final errorCode = authResult['errorCode'] as String?;
+                    final errorMsg = authResult['message'] as String?;
+                    
+                    // Don't log as error if it's a configuration issue - this is expected
+                    if (errorCode == 'configuration-not-found' || errorCode == 'unknown' || (errorMsg?.contains('configuration') ?? false)) {
+                      print('ℹ️ Firebase Auth not configured - employee will continue using local password login');
+                    } else if (errorCode == 'email-already-in-use') {
+                      print('ℹ️ Email already has Firebase Auth account - future logins will use Firebase Auth');
+                    } else {
+                      print('⚠️ Could not create Firebase Auth account: $errorMsg');
+                      print('   Error code: ${errorCode ?? "unknown"}');
+                    }
+                    // Continue anyway - local password works
+                  }
+                } catch (e) {
+                  print('⚠️ Error creating Firebase Auth account: $e');
+                  // Continue anyway - local password works
+                }
+              }
+              
               await LocalStorageService.saveUser(found.empId, 'Employee');
               if (!mounted) return;
               Navigator.of(context).pushReplacement(
                 MaterialPageRoute(builder: (context) => MainScreen()),
               );
               isValid = true;
+            } else {
+              print('❌ Password mismatch - Checked ${passwordKeys.length} keys, ${storedPasswords.length} had passwords');
+              print('❌ Input password does not match any stored password');
+              
+              // Debug: Show all password keys in system
+              final allPasswordKeys = allKeys.where((k) => 
+                k.startsWith('emp_login_id_') || k.startsWith('emp_login_email_')
+              ).toList();
+              print('📋 All password keys in system: $allPasswordKeys');
+              
+              // Debug: Show password values for debugging (BE CAREFUL - only for debugging!)
+              for (var key in allPasswordKeys) {
+                final passValue = prefs.getString(key);
+                print('  Key "$key": ${passValue != null ? "${passValue.length} chars" : "null"}');
+              }
+              
+              // Show a helpful error with all relevant info
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Password mismatch. Check console logs for details. Employee: ${found.empId}, Email: ${found.email ?? "N/A"}'),
+                    backgroundColor: Colors.orange,
+                    duration: Duration(seconds: 8),
+                  ),
+                );
+              }
+            }
+          } else {
+            print('❌ Employee not found');
+          }
+          }
+        } else if (_selectedRole == 'Admin') {
+          // Ensure HybridStorageService is initialized for Firestore access
+          await LocalStorageService.init();
+          await HybridStorageService.init();
+          
+          // Use Firebase Authentication for admin login
+          try {
+            print('🔐 Attempting admin login for: ${input.trim()}');
+            print('📧 Email: ${input.trim()}, Password length: ${pwd.length}');
+            
+            final result = await FirebaseService.signInAdmin(input.trim(), pwd);
+            print('📋 Admin login result: $result');
+            
+            if (result['success'] == true) {
+              print('✅ Login successful, navigating to admin screen');
+              await LocalStorageService.saveUser(result['userId'] ?? input, 'Admin');
+              if (!mounted) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(builder: (context) => AdminMainScreen()),
+              );
+              isValid = true;
+            } else {
+              print('❌ Login failed: ${result['message']}');
+              if (mounted) {
+                // Show more detailed error message with diagnostic button
+                final errorMsg = result['message'] ?? 'Invalid admin credentials';
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      errorMsg,
+                      style: TextStyle(fontSize: 14),
+                    ),
+                    backgroundColor: Colors.red,
+                    duration: Duration(seconds: 10), // Longer duration to read
+                    action: SnackBarAction(
+                      label: 'Diagnose',
+                      textColor: Colors.white,
+                      onPressed: () async {
+                        // Run diagnostics
+                        await _runDiagnostics(context, input.trim(), pwd);
+                      },
+                    ),
+                  ),
+                );
+              }
+            }
+          } catch (e, stackTrace) {
+            print('❌ Admin login exception: $e');
+            print('❌ Stack trace: $stackTrace');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Admin login failed: $e'),
+                  backgroundColor: Colors.red,
+                  duration: Duration(seconds: 8),
+                  action: SnackBarAction(
+                    label: 'Diagnose',
+                    textColor: Colors.white,
+                    onPressed: () async {
+                      await _runDiagnostics(context, input.trim(), pwd);
+                    },
+                  ),
+                ),
+              );
             }
           }
-        } else if (_selectedRole == 'Admin' && input == 'ADMIN' && pwd == 'password') {
-          await LocalStorageService.saveUser(input, 'Admin');
-          if (!mounted) return;
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (context) => AdminMainScreen()),
-          );
-          isValid = true;
         }
         if (!isValid && mounted) {
+          // Show more helpful error message
+          String errorMsg = 'Invalid credentials';
+          if (_selectedRole == 'Employee') {
+            final employees = HybridStorageService.getEmployees();
+            if (employees.isEmpty) {
+              errorMsg = 'No employees found. Please sign up first.';
+            } else {
+              errorMsg = 'Invalid Employee ID/Email or Password.\n\nFound ${employees.length} employee(s) in system.\nPlease check your credentials and try again.';
+            }
+          }
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Invalid credentials'),
+              content: Text(errorMsg),
               backgroundColor: Colors.red,
+              duration: Duration(seconds: 5),
             ),
           );
         }
@@ -76,6 +365,197 @@ class _LoginScreenState extends State<LoginScreen> {
         });
       }
     }
+  }
+
+  Future<void> _runDiagnostics(BuildContext context, String email, String password) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        child: Container(
+          padding: EdgeInsets.all(20),
+          constraints: BoxConstraints(maxWidth: 500, maxHeight: 600),
+          child: FutureBuilder<Map<String, dynamic>>(
+            future: LoginDiagnostics.runFullDiagnostics(email: email, password: password),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Running diagnostics...'),
+                  ],
+                );
+              }
+
+              final results = snapshot.data!;
+              final overall = results['overall'] as Map<String, dynamic>?;
+
+              return SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Login Diagnostics',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    SizedBox(height: 16),
+                    if (overall != null) ...[
+                      _buildStatusRow('Can Sign In', overall['canSignIn'] ?? false),
+                      _buildStatusRow('Has Admin Access', overall['hasAdminAccess'] ?? false),
+                      SizedBox(height: 16),
+                      Container(
+                        padding: EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange[50],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Blocking Issue:',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              overall['blockingIssue'] ?? 'Unknown',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(height: 12),
+                      Container(
+                        padding: EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue[50],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.blue),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Recommendation:',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              overall['recommendation'] ?? 'No recommendation',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    SizedBox(height: 16),
+                    Text(
+                      'Detailed Steps:',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                    SizedBox(height: 8),
+                    ..._buildDetailedSteps(results['steps'] as Map<String, dynamic>?),
+                    SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text('Close'),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusRow(String label, bool status) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label),
+          Icon(
+            status ? Icons.check_circle : Icons.error,
+            color: status ? Colors.green : Colors.red,
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildDetailedSteps(Map<String, dynamic>? steps) {
+    if (steps == null) return [Text('No steps available')];
+
+    return steps.entries.map((entry) {
+      final stepName = entry.key.replaceAll('_', ' ').toUpperCase();
+      final stepData = entry.value as Map<String, dynamic>?;
+      final success = stepData?['success'] == true || stepData?['connected'] == true;
+
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              success ? Icons.check_circle : Icons.error,
+              color: success ? Colors.green : Colors.red,
+              size: 16,
+            ),
+            SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    stepName,
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                  if (stepData?['error'] != null)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          stepData!['error'],
+                          style: TextStyle(fontSize: 10, color: Colors.red, fontWeight: FontWeight.bold),
+                        ),
+                        if (stepData['detailedError'] != null) ...[
+                          SizedBox(height: 4),
+                          Text(
+                            stepData['detailedError'],
+                            style: TextStyle(fontSize: 9, color: Colors.red[700]),
+                          ),
+                        ],
+                        if (stepData['code'] != null)
+                          Text(
+                            'Error code: ${stepData['code']}',
+                            style: TextStyle(fontSize: 8, color: Colors.grey[600], fontFamily: 'monospace'),
+                          ),
+                      ],
+                    )
+                  else if (stepData?['message'] != null)
+                    Text(
+                      stepData!['message'],
+                      style: TextStyle(fontSize: 10),
+                    )
+                  else if (stepData?['uid'] != null)
+                    Text(
+                      'UID: ${stepData!['uid']}',
+                      style: TextStyle(fontSize: 10, fontFamily: 'monospace'),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }).toList();
   }
 
   @override
@@ -178,7 +658,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 TextFormField(
                   controller: _empIdController,
                   decoration: InputDecoration(
-                    labelText: _selectedRole == 'Employee' ? 'Employee ID' : 'Admin ID',
+                    labelText: _selectedRole == 'Employee' ? 'Employee ID' : 'Admin Email',
                     prefixIcon: Icon(Icons.person_outline),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -188,7 +668,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   validator: (value) {
                     if (value == null || value.isEmpty) {
-                      return 'Please enter your ${_selectedRole == 'Employee' ? 'Employee' : 'Admin'} ID';
+                      return 'Please enter your ${_selectedRole == 'Employee' ? 'Employee' : 'Admin'} ${_selectedRole == 'Admin' ? 'Email' : 'ID'}';
+                    }
+                    if (_selectedRole == 'Admin') {
+                      // Validate email format for admin
+                      final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+                      if (!emailRegex.hasMatch(value)) {
+                        return 'Please enter a valid email address';
+                      }
                     }
                     return null;
                   },
@@ -254,19 +741,34 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
                 SizedBox(height: 15),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    TextButton(
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => EmployeeSignUpScreen()),
-                        );
-                      },
-                      child: Text('New employee? Sign up', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1976D2), decoration: TextDecoration.underline)),
-                    ),
-                  ],
-                ),
+                if (_selectedRole == 'Employee')
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(builder: (_) => EmployeeSignUpScreen()),
+                          );
+                        },
+                        child: Text('New employee? Sign up', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1976D2), decoration: TextDecoration.underline)),
+                      ),
+                    ],
+                  ),
+                if (_selectedRole == 'Admin')
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(builder: (_) => CreateAdminScreen()),
+                          );
+                        },
+                        child: Text('Create Admin Account', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1976D2), decoration: TextDecoration.underline)),
+                      ),
+                    ],
+                  ),
                 SizedBox(height: 20),
 
                 // Demo Credentials
@@ -278,12 +780,17 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   child: Column(
                     children: [
+                      // Removed demo credentials for security
+                      // Text(
+                      //   'Demo Credentials:',
+                      //   style: TextStyle(fontWeight: FontWeight.bold),
+                      // ),
+                      // Text('Employee → ID: EMP001 | Password: password'),
+                      // Text('Admin → ID: ADMIN | Password: password'),
                       Text(
-                        'Demo Credentials:',
-                        style: TextStyle(fontWeight: FontWeight.bold),
+                        'Please sign up or contact admin for credentials',
+                        style: TextStyle(color: Colors.grey[600]),
                       ),
-                      Text('Employee → ID: EMP001 | Password: password'),
-                      Text('Admin → ID: ADMIN | Password: password'),
                     ],
                   ),
                 ),
@@ -366,7 +873,7 @@ class _EmployeeSignUpScreenState extends State<EmployeeSignUpScreen> {
   }
   Future<void> _setEmpId() async {
     await LocalStorageService.init();
-    final employees = LocalStorageService.getEmployees();
+    final employees = HybridStorageService.getEmployees();
     final idx = employees.length + 1;
     setState(() {
       _empId = 'EMP${idx.toString().padLeft(3, '0')}';
@@ -377,10 +884,11 @@ class _EmployeeSignUpScreenState extends State<EmployeeSignUpScreen> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
     await LocalStorageService.init();
-    final employees = LocalStorageService.getEmployees();
+    final employees = HybridStorageService.getEmployees();
     // Check for unique email
     if (employees.any((e) => (e.email ?? '').toLowerCase() == emailController.text.trim().toLowerCase())) {
       setState(() => _isLoading = false);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Email already registered.'), backgroundColor: Colors.red),
       );
@@ -399,11 +907,37 @@ class _EmployeeSignUpScreenState extends State<EmployeeSignUpScreen> {
       email: emailController.text.trim(),
     );
     employees.add(newEmployee);
-    await LocalStorageService.saveEmployees(employees);
-    // Save login (demo: plain for now)
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('emp_login_email_${newEmployee.email}', passwordController.text);
-    await prefs.setString('emp_login_id_${newEmployee.empId}', passwordController.text);
+    // Save via HybridStorageService (syncs to Firestore)
+    await HybridStorageService.saveEmployee(newEmployee);
+    
+    // Create Firebase Authentication account for employee
+    final password = passwordController.text.trim();
+    if (newEmployee.email != null && newEmployee.email!.isNotEmpty) {
+      print('🔐 Creating Firebase Auth account for employee ${newEmployee.empId}...');
+      final authResult = await FirebaseService.createEmployeeAccount(
+        newEmployee.email!,
+        password,
+        newEmployee.empId,
+      );
+      
+      if (authResult['success'] == true) {
+        print('✅ Firebase Auth account created successfully');
+      } else {
+        print('⚠️ Firebase Auth account creation failed: ${authResult['message']}');
+        // Still allow signup but user will need to use fallback login
+        // Save password locally as backup
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('emp_login_id_${newEmployee.empId}', password);
+        await prefs.setString('emp_login_email_${newEmployee.email}', password);
+      }
+    } else {
+      print('⚠️ No email provided, saving password locally only');
+      // Fallback: save password locally if no email
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('emp_login_id_${newEmployee.empId}', password);
+    }
+    
+    print('✅ Employee registration successful: ${newEmployee.empId}');
     setState(() => _isLoading = false);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
