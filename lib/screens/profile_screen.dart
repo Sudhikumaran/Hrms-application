@@ -4,6 +4,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/employee.dart';
 import '../services/local_storage_service.dart';
+import '../services/hybrid_storage_service.dart';
+import '../services/firebase_service.dart';
 import 'login_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -42,7 +44,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final userId = LocalStorageService.getUserId();
     Employee? user;
     if (userId != null) {
-      final employees = LocalStorageService.getEmployees();
+      final employees = HybridStorageService.getEmployees();
       if (employees.isNotEmpty) {
         user = employees.firstWhere(
           (e) => e.empId == userId,
@@ -52,15 +54,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
     user ??= _fallbackUser;
 
-    final records = LocalStorageService.getAttendance(userId ?? user.empId);
+    final records = HybridStorageService.getAttendance(userId ?? user.empId);
     final now = DateTime.now();
     final monthKey = DateFormat('yyyyMM').format(now);
-    final monthRecords = records.where((r) => (r.date ?? '').startsWith(monthKey)).toList();
+    final monthRecords = records.where((r) => r.date.startsWith(monthKey)).toList();
     double totalHours = monthRecords.fold(0, (sum, r) => sum + r.hours);
     double averageDailyHours = monthRecords.isNotEmpty ? totalHours / monthRecords.length : 0;
     final presentStatuses = {'PRESENT', 'WFH', 'LATE'};
-    final presentDays = monthRecords.where((r) => presentStatuses.contains((r.status ?? '').toUpperCase())).length;
-    final wfhDays = monthRecords.where((r) => (r.status ?? '').toUpperCase() == 'WFH').length;
+    final presentDays = monthRecords.where((r) => presentStatuses.contains(r.status.toUpperCase())).length;
+    final wfhDays = monthRecords.where((r) => r.status.toUpperCase() == 'WFH').length;
     final firstDay = DateTime(now.year, now.month, 1);
     final daysElapsed = now.difference(firstDay).inDays + 1;
     final attendanceRate = daysElapsed > 0 ? ((presentDays / daysElapsed) * 100).clamp(0, 100).toDouble() : 0.0;
@@ -255,50 +257,111 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Email not available for this user.')));
       return;
     }
+    final currentController = TextEditingController();
     final newController = TextEditingController();
     final confirmController = TextEditingController();
+    bool isLoading = false;
+    
     await showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Change Password'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: newController,
-              obscureText: true,
-              decoration: InputDecoration(labelText: 'New Password'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: Text('Change Password'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: currentController,
+                obscureText: true,
+                decoration: InputDecoration(labelText: 'Current Password'),
+                enabled: !isLoading,
+              ),
+              SizedBox(height: 16),
+              TextField(
+                controller: newController,
+                obscureText: true,
+                decoration: InputDecoration(labelText: 'New Password'),
+                enabled: !isLoading,
+              ),
+              TextField(
+                controller: confirmController,
+                obscureText: true,
+                decoration: InputDecoration(labelText: 'Confirm New Password'),
+                enabled: !isLoading,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isLoading ? null : () => Navigator.pop(ctx),
+              child: Text('Cancel'),
             ),
-            TextField(
-              controller: confirmController,
-              obscureText: true,
-              decoration: InputDecoration(labelText: 'Confirm Password'),
+            TextButton(
+              onPressed: isLoading ? null : () async {
+                final currentPass = currentController.text.trim();
+                final newPass = newController.text.trim();
+                final confirm = confirmController.text.trim();
+                
+                if (currentPass.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Please enter current password.')),
+                  );
+                  return;
+                }
+                
+                if (newPass.length < 6) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('New password must be at least 6 characters.')),
+                  );
+                  return;
+                }
+                
+                if (newPass != confirm) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('New passwords do not match.')),
+                  );
+                  return;
+                }
+                
+                setState(() => isLoading = true);
+                
+                // Use FirebaseService.changePassword for proper password update
+                final result = await FirebaseService.changePassword(
+                  currentPassword: currentPass,
+                  newPassword: newPass,
+                );
+                
+                setState(() => isLoading = false);
+                
+                if (!ctx.mounted) return;
+                
+                if (result['success'] == true) {
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(result['message'] ?? 'Password updated successfully.'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(result['message'] ?? 'Password update failed.'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              },
+              child: isLoading 
+                  ? SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text('Update'),
             ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel')),
-          TextButton(
-            onPressed: () async {
-              final newPass = newController.text.trim();
-              final confirm = confirmController.text.trim();
-              if (newPass.length < 6) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Password must be at least 6 characters.')));
-                return;
-              }
-              if (newPass != confirm) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Passwords do not match.')));
-                return;
-              }
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setString('emp_login_email_$email', newPass);
-              await prefs.setString('emp_login_id_$empId', newPass);
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Password updated successfully.')));
-            },
-            child: Text('Update'),
-          ),
-        ],
       ),
     );
   }

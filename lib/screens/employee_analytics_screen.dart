@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../services/local_storage_service.dart';
+import '../services/hybrid_storage_service.dart';
 import '../models/attendance_record.dart';
+import '../models/employee.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class EmployeeAnalyticsScreen extends StatefulWidget {
@@ -13,11 +15,13 @@ class _EmployeeAnalyticsScreenState extends State<EmployeeAnalyticsScreen> {
   DateTime _focusedMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
   String? _userId;
   List<AttendanceRecord> _records = [];
+  Employee? _currentEmployee;
 
-  // Config: mark late if check-in after 09:15
+  // Config: mark late thresholds based on shift
   static final DateFormat _dateKey = DateFormat('yyyyMMdd');
   static final DateFormat _timeFmt = DateFormat('HH:mm');
-  static const String _lateThreshold = '09:15';
+  static const String _morningLateThreshold = '09:15'; // 9:15 AM
+  static const String _nightLateThreshold = '21:15'; // 9:15 PM
 
   @override
   void initState() {
@@ -29,11 +33,77 @@ class _EmployeeAnalyticsScreenState extends State<EmployeeAnalyticsScreen> {
     await LocalStorageService.init();
     final id = LocalStorageService.getUserId();
     if (id == null) return;
-    final all = LocalStorageService.getAttendance(id);
+    
+    // Get employee details to determine shift
+    final employees = HybridStorageService.getEmployees();
+    final employee = employees.where((e) => e.empId == id).firstOrNull;
+    
+    final all = HybridStorageService.getAttendance(id);
     setState(() {
       _userId = id;
       _records = all;
+      _currentEmployee = employee;
     });
+  }
+  
+  /// Get late threshold based on employee's shift
+  String _getLateThresholdForShift() {
+    if (_currentEmployee == null) {
+      return _morningLateThreshold; // Default to morning
+    }
+    
+    final shiftLower = _currentEmployee!.shift.toLowerCase();
+    if (shiftLower.contains('night') || shiftLower.contains('9:00 pm') || shiftLower.contains('9:00 PM')) {
+      return _nightLateThreshold; // Night shift: 9:15 PM
+    } else {
+      return _morningLateThreshold; // Morning shift: 9:15 AM
+    }
+  }
+  
+  /// Check if check-in time is late based on employee's shift
+  bool _isLateCheckIn(String checkInTime, String? shift) {
+    try {
+      // Parse check-in time - it's in 24-hour format (HH:mm)
+      final parts = checkInTime.split(':');
+      if (parts.length < 2) {
+        print('⚠️ Invalid check-in time format: $checkInTime');
+        return false;
+      }
+      
+      final hour = int.parse(parts[0]);
+      final minute = int.parse(parts[1]);
+      
+      // Determine shift type
+      final shiftLower = (shift ?? '').toLowerCase();
+      final isNightShift = shiftLower.contains('night') || 
+                          shiftLower.contains('9:00 pm') || 
+                          shiftLower.contains('9:00 PM') ||
+                          shiftLower.contains('21:00');
+      
+      if (isNightShift) {
+        // Night shift logic: late if check-in is AFTER 9:15 PM (21:15)
+        // Example: 8:25 PM (20:25) = NOT late (early/on-time) ✅
+        // Example: 9:00 PM (21:00) = NOT late (on-time) ✅
+        // Example: 9:15 PM (21:15) = NOT late (exactly on threshold) ✅
+        // Example: 9:16 PM (21:16) = LATE ❌
+        // Example: 9:20 PM (21:20) = LATE ❌
+        final isLate = hour > 21 || (hour == 21 && minute > 15);
+        print('🌙 Night shift - Check-in: $checkInTime (${hour}:${minute.toString().padLeft(2, '0')}), Late: $isLate');
+        return isLate;
+      } else {
+        // Morning shift logic: late if check-in is AFTER 9:15 AM
+        // Example: 8:45 AM = NOT late ✅
+        // Example: 9:00 AM = NOT late ✅
+        // Example: 9:15 AM = NOT late (exactly on threshold) ✅
+        // Example: 9:16 AM = LATE ❌
+        final isLate = hour > 9 || (hour == 9 && minute > 15);
+        print('🌅 Morning shift - Check-in: $checkInTime (${hour}:${minute.toString().padLeft(2, '0')}), Late: $isLate');
+        return isLate;
+      }
+    } catch (e) {
+      print('⚠️ Error parsing check-in time: $checkInTime - $e');
+      return false; // Default to not late if parsing fails
+    }
   }
 
   void _changeMonth(int delta) {
@@ -58,20 +128,16 @@ class _EmployeeAnalyticsScreenState extends State<EmployeeAnalyticsScreen> {
       // If any record exists, compute late vs present by check-in
       final firstCheckIn = dayRecords
           .map((r) => r.checkIn)
-          .where((t) => t != null && t!.trim().isNotEmpty)
+          .where((t) => t != null && t.trim().isNotEmpty)
           .cast<String>()
           .toList()
         ..sort();
       if (firstCheckIn.isEmpty) {
         dayToStatus[day] = 'present';
       } else {
-        try {
-          final threshold = _timeFmt.parse(_lateThreshold);
-          final actual = _timeFmt.parse(firstCheckIn.first);
-          dayToStatus[day] = actual.isAfter(threshold) ? 'late' : 'present';
-        } catch (_) {
-          dayToStatus[day] = 'present';
-        }
+        // Use shift-aware late check
+        final isLate = _isLateCheckIn(firstCheckIn.first, _currentEmployee?.shift);
+        dayToStatus[day] = isLate ? 'late' : 'present';
       }
     }
     return dayToStatus;
@@ -202,7 +268,7 @@ class _EmployeeAnalyticsScreenState extends State<EmployeeAnalyticsScreen> {
       tiles.add(Container());
     }
 
-    Color _colorFor(String s) {
+    Color colorFor(String s) {
       switch (s) {
         case 'present':
           return Colors.green.shade400;
@@ -219,7 +285,7 @@ class _EmployeeAnalyticsScreenState extends State<EmployeeAnalyticsScreen> {
       tiles.add(Container(
         margin: EdgeInsets.all(4),
         decoration: BoxDecoration(
-          color: _colorFor(status),
+          color: colorFor(status),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Center(
@@ -244,9 +310,9 @@ class _EmployeeAnalyticsScreenState extends State<EmployeeAnalyticsScreen> {
       return Container(
         padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
+          color: color.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withOpacity(0.3)),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

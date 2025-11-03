@@ -4,7 +4,7 @@ import '../../models/attendance_record.dart';
 import '../../services/pdf_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
-import '../../services/local_storage_service.dart';
+import '../../services/hybrid_storage_service.dart';
 
 class AdminAnalyticsScreen extends StatefulWidget {
   @override
@@ -22,13 +22,13 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
   String? _selectedRole;
   static const _presetKey = 'admin_analytics_filter_preset';
 
-  List<Employee> get employees => LocalStorageService.getEmployees();
+  List<Employee> get employees => HybridStorageService.getEmployees();
   Map<String, List<AttendanceRecord>> get attendanceData => _getSavedAttendance();
 
   Map<String, List<AttendanceRecord>> _getSavedAttendance() {
     final Map<String, List<AttendanceRecord>> result = {};
     for (final emp in employees) {
-      result[emp.empId] = LocalStorageService.getAttendance(emp.empId);
+      result[emp.empId] = HybridStorageService.getAttendance(emp.empId);
     }
     return result;
   }
@@ -65,12 +65,13 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
       } catch(_) {
         todayRecord = null;
       }
-      // If employee checked in, they are present/WFH/Late (not absent)
+      // If employee checked in, check if late or on-time
       if (todayRecord != null && todayRecord.checkIn != null && todayRecord.checkIn!.isNotEmpty) {
-        present++;
         // Check if late based on shift
         if (_isLateCheckIn(todayRecord.checkIn!, employee.shift)) {
-          late++;
+          late++; // Count as late only, not as present
+        } else {
+          present++; // Count as present only if not late
         }
       } else {
         absent++;
@@ -90,16 +91,26 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
       final hour = int.parse(parts[0]);
       final minute = int.parse(parts[1]);
       
-      // Determine late threshold based on shift: late if check-in after 9:10 AM/PM
+      // Determine late threshold based on shift: late if check-in after 9:15 AM/PM
       final shiftLower = shift.toLowerCase();
-      if (shiftLower.startsWith('night')) {
-        // Night shift: late if after 9:10 PM
-        return hour >= 21 && minute > 10;
+      
+      // Check for night shift (handles "Night", "Night Shift", "9:00 PM", etc.)
+      final isNightShift = shiftLower.contains('night') || 
+                          shiftLower.contains('9:00 pm') || 
+                          shiftLower.contains('9:00 PM') ||
+                          shiftLower.contains('21:00');
+      
+      if (isNightShift) {
+        // Night shift: late if check-in is AFTER 9:15 PM (21:15)
+        // Example: 8:25 PM (20:25) = NOT late, 9:20 PM (21:20) = LATE
+        return hour > 21 || (hour == 21 && minute > 15);
       } else {
-        // Morning shift: late if after 9:10 AM
-        return hour > 9 || (hour == 9 && minute > 10);
+        // Morning shift: late if check-in is AFTER 9:15 AM
+        // Example: 8:45 AM = NOT late, 9:20 AM = LATE
+        return hour > 9 || (hour == 9 && minute > 15);
       }
     } catch (e) {
+      print('⚠️ Error in _isLateCheckIn: $e');
       return false;
     }
   }
@@ -397,7 +408,7 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
       ),
       items: [
         const DropdownMenuItem<String>(value: null, child: Text('All')),
-        ...options.map((o) => DropdownMenuItem<String>(value: o, child: Text(o))).toList(),
+        ...options.map((o) => DropdownMenuItem<String>(value: o, child: Text(o))),
       ],
       onChanged: onChanged,
     );
@@ -410,7 +421,9 @@ class _AdminAnalyticsScreenState extends State<AdminAnalyticsScreen> {
       (r)=> r.date==_internalDateKey,
       orElse: ()=> AttendanceRecord(date:_internalDateKey,status:'Absent',hours:0,location:'',method:''),
     );
-    return rec!=null && rec.checkIn!=null && rec.checkIn!.isNotEmpty;
+    // Must have checked in AND not be late
+    if(rec==null || rec.checkIn==null || rec.checkIn!.isEmpty) return false;
+    return !_isLateCheckIn(rec.checkIn!, e.shift);
   }).toList());
   void _drillAbsent() => _showDrill('Absent', _filteredEmployees().where((e){
     final rec = attendanceData[e.empId]?.firstWhere(

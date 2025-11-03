@@ -1,13 +1,12 @@
-buildscript {
-    dependencies {
-        classpath("com.google.gms:google-services:4.4.2")
-    }
-}
-
 allprojects {
     repositories {
         google()
         mavenCentral()
+    }
+    
+    configurations.all {
+        // Exclude firebase-iid from all dependencies to resolve duplicate class conflict
+        exclude(group = "com.google.firebase", module = "firebase-iid")
     }
 }
 

@@ -1,0 +1,94 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is admin
+    function isAdmin() {
+      return request.auth != null && 
+             exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.isAdmin == true;
+    }
+    
+    // Helper function to check if user owns the resource
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Employees collection
+    match /employees/{employeeId} {
+      // All authenticated users can read employees (for finding their own data)
+      allow read: if request.auth != null;
+      
+      // Only admins can create/update employees
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+    
+    // Attendance collection
+    match /attendance/{attendanceId} {
+      // Users can read their own attendance or admins can read all
+      allow read: if request.auth != null && 
+                     (resource.data.employeeId == request.auth.uid || isAdmin());
+      
+      // Users can create their own attendance records
+      allow create: if request.auth != null && 
+                       request.resource.data.employeeId == request.auth.uid;
+      
+      // Users can update their own attendance or admins can update any
+      allow update: if request.auth != null && 
+                       (resource.data.employeeId == request.auth.uid || isAdmin());
+      
+      // Only admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // Leave requests collection
+    match /leaveRequests/{leaveId} {
+      // Users can read their own requests or admins can read all
+      allow read: if request.auth != null && 
+                     (resource.data.empId == request.auth.uid || isAdmin());
+      
+      // Users can create their own leave requests
+      allow create: if request.auth != null && 
+                       request.resource.data.empId == request.auth.uid;
+      
+      // Users can update their own requests or admins can update any
+      allow update: if request.auth != null && 
+                       (resource.data.empId == request.auth.uid || isAdmin());
+      
+      // Only admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // Tasks collection (if used)
+    match /tasks/{taskId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null && 
+                       (resource.data.assignedTo == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+    
+    // Admins collection - only admins can read their own record
+    match /admins/{adminId} {
+      allow read: if request.auth != null && request.auth.uid == adminId;
+      // Write only via Admin SDK (server-side)
+      allow write: if false;
+    }
+    
+    // Config collection (for admin settings)
+    match /config/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+    
+    // Deny all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+
+

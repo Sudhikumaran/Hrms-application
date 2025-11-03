@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -7,9 +10,16 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+// Load keystore properties if available
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace = "com.example.fortumars_hrm_app"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36  // Required by plugins (camera_android, geolocator_android, etc.)
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -22,21 +32,71 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        // Application ID - Update this to your own unique identifier before publishing
+        // Format: com.yourcompany.yourapp
         applicationId = "com.example.fortumars_hrm_app"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
+    
+    // Fix for plugins with old AndroidManifest package attributes
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    // Signing configurations
+    signingConfigs {
+        // Release signing (if key.properties exists)
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String?
+                keyPassword = keystoreProperties["keyPassword"] as String?
+                storeFile = keystoreProperties["storeFile"]?.let { file(it) }
+                storePassword = keystoreProperties["storePassword"] as String?
+            }
+        }
+    }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // Use release signing if available, otherwise fall back to debug
+            // For production: Create key.properties file with your release keystore
+            signingConfig = if (keystorePropertiesFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug") // Fallback for testing
+            }
+            
+            // Enable code shrinking and obfuscation for production
+            isMinifyEnabled = false // Set to true if you want to enable ProGuard
+            isShrinkResources = false // Set to true if you want to enable resource shrinking
+            
+            // ProGuard rules (even if minify is disabled, some rules help)
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+        
+        debug {
             signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+    
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "/META-INF/DEPENDENCIES"
+            excludes += "/META-INF/LICENSE"
+            excludes += "/META-INF/LICENSE.txt"
+            excludes += "/META-INF/license.txt"
+            excludes += "/META-INF/NOTICE"
+            excludes += "/META-INF/NOTICE.txt"
+            excludes += "/META-INF/notice.txt"
         }
     }
 }
@@ -46,6 +106,13 @@ flutter {
 }
 
 dependencies {
-    // Add Firebase BoM
+    // Add Firebase BoM (Bill of Materials) to manage Firebase dependency versions
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    
+    // Firebase dependencies (versions managed by BoM above)
+    // Note: firebase-core is deprecated and not needed
+    // Exclude firebase-iid to resolve duplicate class conflict
+    implementation("com.google.firebase:firebase-messaging") {
+        exclude(group = "com.google.firebase", module = "firebase-iid")
+    }
 }

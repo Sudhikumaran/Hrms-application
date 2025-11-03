@@ -183,10 +183,58 @@ class FirebaseService {
         }
       }
       
+      // NEW: Check Firestore password first (like admin login)
+      // This allows login even if Firebase Auth is not configured
+      if (employeeDoc != null) {
+        final employeeData = employeeDoc.data() as Map<String, dynamic>?;
+        if (employeeData != null) {
+          final authMethod = employeeData['authMethod'] as String?;
+          final storedPassword = employeeData['passwordHash'] as String?;
+          
+          // Check Firestore password if available (FINAL - no fallback to local)
+          if (storedPassword != null) {
+            print('🔍 Found employee with Firestore password - using Firestore only');
+            
+            if (storedPassword == password) {
+              print('✅ Password verified from Firestore for ${empId}');
+              
+              // Store employee data locally
+              final prefs = await SharedPreferences.getInstance();
+              final finalEmpId = (empId != null && empId.isNotEmpty) ? empId : emailOrEmpId.toUpperCase();
+              await prefs.setString('userId', finalEmpId);
+              final emailValue = employeeEmail != null && employeeEmail.isNotEmpty ? employeeEmail! : '';
+              await prefs.setString('userEmail', emailValue);
+              await prefs.setString('userRole', 'Employee');
+              
+              // Update local storage password to match Firestore (for sync)
+              await prefs.setString('emp_login_id_$finalEmpId', password);
+              if (emailValue.isNotEmpty) {
+                await prefs.setString('emp_login_email_$emailValue', password);
+              }
+              
+              return {
+                'success': true,
+                'userId': finalEmpId,
+                'email': employeeEmail,
+                'message': 'Employee login successful (direct Firestore)',
+              };
+            } else {
+              // Firestore password exists but doesn't match - reject login
+              print('❌ Firestore password mismatch');
+              return {
+                'success': false,
+                'message': 'Incorrect password',
+              };
+            }
+          }
+        }
+      }
+      
       if (employeeEmail == null || employeeEmail.isEmpty) {
         return {
           'success': false,
           'message': 'Employee account does not have an email. Please contact admin.',
+          'useFallback': true,
         };
       }
       
@@ -271,9 +319,126 @@ class FirebaseService {
       bool useFallback = false;
       
       if (e.code == 'user-not-found') {
-        // Employee might not have Firebase Auth account yet - use fallback
-        message = 'No Firebase account found. Trying local password...';
-        useFallback = true;
+        // Check if employee has Firestore password (like admin)
+        print('⚠️ Firebase Auth: user-not-found, checking Firestore for direct auth...');
+        try {
+          // Re-query Firestore for employee
+          final employeesRef = _firestore.collection('employees');
+          QuerySnapshot? emailQueryRetry;
+          QuerySnapshot? empIdQueryRetry;
+          
+          try {
+            emailQueryRetry = await employeesRef
+                .where('email', isEqualTo: emailOrEmpId)
+                .limit(1)
+                .get();
+          } catch (e) {
+            print('Email query retry failed: $e');
+          }
+          
+          if (emailQueryRetry?.docs.isEmpty ?? true) {
+            try {
+              empIdQueryRetry = await employeesRef
+                  .where('empId', isEqualTo: emailOrEmpId.toUpperCase())
+                  .limit(1)
+                  .get();
+              if (empIdQueryRetry.docs.isEmpty) {
+                empIdQueryRetry = await employeesRef
+                    .where('employeeId', isEqualTo: emailOrEmpId.toUpperCase())
+                    .limit(1)
+                    .get();
+              }
+            } catch (e) {
+              print('EmpId query retry failed: $e');
+            }
+          }
+          
+          QueryDocumentSnapshot? employeeDoc;
+          if (emailQueryRetry?.docs.isNotEmpty ?? false) {
+            employeeDoc = emailQueryRetry!.docs.first;
+          } else if (empIdQueryRetry?.docs.isNotEmpty ?? false) {
+            employeeDoc = empIdQueryRetry!.docs.first;
+          }
+          
+          if (employeeDoc != null) {
+            final employeeData = employeeDoc.data() as Map<String, dynamic>?;
+            if (employeeData != null) {
+              final storedPassword = employeeData['passwordHash'] as String?;
+              final authMethod = employeeData['authMethod'] as String?;
+              final empId = (employeeData['empId'] as String?) ?? (employeeData['employeeId'] as String?) ?? '';
+              final empEmail = employeeData['email'] as String?;
+              
+              // Check Firestore password first
+              if (storedPassword != null && storedPassword == password) {
+                print('✅ Found employee in Firestore with matching password');
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('userId', empId);
+                await prefs.setString('userEmail', empEmail ?? '');
+                await prefs.setString('userRole', 'Employee');
+                
+                return {
+                  'success': true,
+                  'userId': empId,
+                  'email': empEmail,
+                  'message': 'Employee login successful (direct Firestore)',
+                };
+              } else if (storedPassword != null) {
+                message = 'Incorrect password';
+              } else {
+                // No Firestore password - check local storage ONLY for legacy employees without Firestore password
+                // This is a one-time migration path - once password is in Firestore, this path is never used
+                print('⚠️ No Firestore password found, checking local storage for legacy employee...');
+                final prefs = await SharedPreferences.getInstance();
+                final localPassword = prefs.getString('emp_login_id_$empId') ?? 
+                                     prefs.getString('emp_login_email_${empEmail ?? ''}');
+                
+                if (localPassword != null && localPassword == password) {
+                  print('✅ Password verified from local storage, migrating to Firestore...');
+                  
+                  // Migrate password to Firestore - THIS IS THE SOURCE OF TRUTH
+                  try {
+                    await employeeDoc.reference.update({
+                      'passwordHash': password,
+                      'authMethod': 'direct',
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+                    print('✅ Password migrated to Firestore - future logins will use Firestore only');
+                    
+                    // Update local storage to match Firestore
+                    await prefs.setString('emp_login_id_$empId', password);
+                    if (empEmail != null && empEmail.isNotEmpty) {
+                      await prefs.setString('emp_login_email_$empEmail', password);
+                    }
+                  } catch (e) {
+                    print('⚠️ Could not migrate password: $e');
+                    return {
+                      'success': false,
+                      'message': 'Migration failed. Please contact admin.',
+                    };
+                  }
+                  
+                  await prefs.setString('userId', empId);
+                  await prefs.setString('userEmail', empEmail ?? '');
+                  await prefs.setString('userRole', 'Employee');
+                  
+                  return {
+                    'success': true,
+                    'userId': empId,
+                    'email': empEmail,
+                    'message': 'Employee login successful (migrated from local)',
+                  };
+                } else {
+                  message = 'Incorrect password or account not set up. Please contact admin.';
+                  useFallback = false;
+                }
+              }
+            }
+          }
+        } catch (firestoreError) {
+          print('⚠️ Error checking Firestore for direct employee auth: $firestoreError');
+          message = 'No Firebase account found. Trying local password...';
+          useFallback = true;
+        }
       } else if (e.code == 'wrong-password') {
         message = 'Incorrect password';
       } else if (e.code == 'invalid-email') {
@@ -290,6 +455,126 @@ class FirebaseService {
       };
     } catch (e) {
       print('Employee sign in error: $e');
+      
+      // Last resort: Check Firestore for direct employee (like admin)
+      try {
+        print('⚠️ Final attempt: Checking Firestore for direct employee...');
+        
+        // Re-query Firestore for employee
+        final employeesRef = _firestore.collection('employees');
+        QuerySnapshot? emailQueryFinal;
+        QuerySnapshot? empIdQueryFinal;
+        
+        try {
+          emailQueryFinal = await employeesRef
+              .where('email', isEqualTo: emailOrEmpId)
+              .limit(1)
+              .get();
+        } catch (e) {
+          print('Email query final failed: $e');
+        }
+        
+        if (emailQueryFinal?.docs.isEmpty ?? true) {
+          try {
+            empIdQueryFinal = await employeesRef
+                .where('empId', isEqualTo: emailOrEmpId.toUpperCase())
+                .limit(1)
+                .get();
+            if (empIdQueryFinal.docs.isEmpty) {
+              empIdQueryFinal = await employeesRef
+                  .where('employeeId', isEqualTo: emailOrEmpId.toUpperCase())
+                  .limit(1)
+                  .get();
+            }
+          } catch (e) {
+            print('EmpId query final failed: $e');
+          }
+        }
+        
+        QueryDocumentSnapshot? employeeDoc;
+        if (emailQueryFinal?.docs.isNotEmpty ?? false) {
+          employeeDoc = emailQueryFinal!.docs.first;
+        } else if (empIdQueryFinal?.docs.isNotEmpty ?? false) {
+          employeeDoc = empIdQueryFinal!.docs.first;
+        }
+        
+        if (employeeDoc != null) {
+          final employeeData = employeeDoc.data() as Map<String, dynamic>?;
+          if (employeeData != null) {
+            final storedPassword = employeeData['passwordHash'] as String?;
+            final authMethod = employeeData['authMethod'] as String?;
+            final empId = (employeeData['empId'] as String?) ?? (employeeData['employeeId'] as String?) ?? '';
+            final empEmail = employeeData['email'] as String?;
+            
+            // Check Firestore password if available (FINAL - no fallback)
+            if (storedPassword != null) {
+              if (storedPassword == password) {
+                print('✅ Found employee in Firestore - password verified');
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('userId', empId);
+                await prefs.setString('userEmail', empEmail ?? '');
+                await prefs.setString('userRole', 'Employee');
+                
+                // Sync local storage password to match Firestore
+                await prefs.setString('emp_login_id_$empId', password);
+                if (empEmail != null && empEmail.isNotEmpty) {
+                  await prefs.setString('emp_login_email_$empEmail', password);
+                }
+                
+                return {
+                  'success': true,
+                  'userId': empId,
+                  'email': empEmail,
+                  'message': 'Employee login successful (direct Firestore)',
+                };
+              } else {
+                // Password doesn't match - reject
+                print('❌ Firestore password mismatch');
+              }
+            } else {
+              // No Firestore password - one-time migration from local storage
+              print('⚠️ No Firestore password - checking local storage for legacy employee (one-time migration)...');
+              final prefs = await SharedPreferences.getInstance();
+              final localPassword = prefs.getString('emp_login_id_$empId') ?? 
+                                   prefs.getString('emp_login_email_${empEmail ?? ''}');
+              
+              if (localPassword != null && localPassword == password) {
+                print('✅ Password verified from local storage, migrating to Firestore...');
+                
+                // Migrate to Firestore - THIS BECOMES THE SOURCE OF TRUTH
+                try {
+                  await employeeDoc.reference.update({
+                    'passwordHash': password,
+                    'authMethod': 'direct',
+                    'updatedAt': FieldValue.serverTimestamp(),
+                  });
+                  print('✅ Password migrated - future logins will ONLY use Firestore');
+                } catch (e) {
+                  print('⚠️ Migration failed: $e');
+                  return {
+                    'success': false,
+                    'message': 'Migration failed. Please contact admin.',
+                  };
+                }
+                
+                await prefs.setString('userId', empId);
+                await prefs.setString('userEmail', empEmail ?? '');
+                await prefs.setString('userRole', 'Employee');
+                
+                return {
+                  'success': true,
+                  'userId': empId,
+                  'email': empEmail,
+                  'message': 'Employee login successful (migrated)',
+                };
+              }
+            }
+          }
+        }
+      } catch (firestoreError) {
+        print('⚠️ Firestore check failed: $firestoreError');
+      }
+      
       // If Firestore/network error, try fallback
       final errorStr = e.toString().toLowerCase();
       final isNetworkError = errorStr.contains('firestore') || 
@@ -1522,7 +1807,7 @@ class FirebaseService {
 
   // ==================== PASSWORD MANAGEMENT ====================
 
-  /// Change password for current user
+  /// Change password for current user (supports both admin and employee)
   static Future<Map<String, dynamic>> changePassword({
     required String currentPassword,
     required String newPassword,
@@ -1532,7 +1817,221 @@ class FirebaseService {
       final prefs = await SharedPreferences.getInstance();
       final userId = prefs.getString('userId');
       final userEmail = prefs.getString('userEmail');
+      final userRole = prefs.getString('userRole');
       
+      // Handle Employee password change
+      if (userRole == 'Employee' && userId != null) {
+        print('🔐 Changing password for employee: $userId');
+        
+        try {
+          // Find employee in Firestore
+          final employeesRef = _firestore.collection('employees');
+          QuerySnapshot? employeeQuery;
+          
+          // Try by empId
+          try {
+            employeeQuery = await employeesRef
+                .where('empId', isEqualTo: userId)
+                .limit(1)
+                .get();
+            
+            if (employeeQuery.docs.isEmpty) {
+              employeeQuery = await employeesRef
+                  .where('employeeId', isEqualTo: userId)
+                  .limit(1)
+                  .get();
+            }
+          } catch (e) {
+            print('⚠️ Query by empId failed: $e');
+          }
+          
+          // Try by email if not found
+          if ((employeeQuery?.docs.isEmpty ?? true) && userEmail != null) {
+            try {
+              employeeQuery = await employeesRef
+                  .where('email', isEqualTo: userEmail.trim())
+                  .limit(1)
+                  .get();
+            } catch (e) {
+              print('⚠️ Query by email failed: $e');
+            }
+          }
+          
+          // Alternative: Try to find document using all documents (if queries fail)
+          QueryDocumentSnapshot? foundDoc;
+          if ((employeeQuery?.docs.isEmpty ?? true)) {
+            print('⚠️ Query failed, trying to find document by iterating...');
+            try {
+              final allDocs = await employeesRef.get();
+              for (var doc in allDocs.docs) {
+                final data = doc.data() as Map<String, dynamic>;
+                final docEmpId = (data['empId'] as String?) ?? (data['employeeId'] as String?);
+                final docEmail = data['email'] as String?;
+                
+                if ((docEmpId != null && docEmpId == userId) || 
+                    (docEmail != null && userEmail != null && docEmail.toLowerCase() == userEmail.toLowerCase())) {
+                  foundDoc = doc;
+                  print('✅ Found employee document by iteration: ${doc.id}');
+                  break;
+                }
+              }
+            } catch (e) {
+              print('⚠️ Iteration search failed: $e');
+            }
+          }
+          
+          if ((employeeQuery?.docs.isNotEmpty ?? false) || foundDoc != null) {
+            QueryDocumentSnapshot employeeDoc = foundDoc ?? employeeQuery!.docs.first;
+            final employeeData = employeeDoc.data() as Map<String, dynamic>;
+            final storedPassword = employeeData['passwordHash'] as String?;
+            final authMethod = employeeData['authMethod'] as String?;
+            final empEmail = employeeData['email'] as String?;
+            final docId = employeeDoc.id;
+            
+            print('📋 Found employee document ID: $docId');
+            print('📋 Employee email: $empEmail');
+            print('📋 Employee ID: $userId');
+            print('📋 Current Firestore passwordHash: ${storedPassword != null ? "***${storedPassword.length} chars" : "null"}');
+            
+            // Verify current password
+            bool passwordValid = false;
+            
+            // Check Firestore password
+            if (storedPassword != null && storedPassword == currentPassword) {
+              passwordValid = true;
+              print('✅ Current password verified from Firestore');
+            } else {
+              // Check local storage (legacy employees)
+              final localPassword = prefs.getString('emp_login_id_$userId') ?? 
+                                   (empEmail != null ? prefs.getString('emp_login_email_$empEmail') : null);
+              
+              if (localPassword != null && localPassword == currentPassword) {
+                passwordValid = true;
+                print('✅ Current password verified from local storage');
+              }
+            }
+            
+            if (!passwordValid) {
+              print('❌ Password validation failed');
+              return {
+                'success': false,
+                'message': 'Current password is incorrect',
+              };
+            }
+            
+            // Update password in Firestore (PRIMARY SOURCE OF TRUTH)
+            try {
+              print('🔄 Updating password in Firestore document: $docId');
+              print('🔄 Document reference path: ${employeeDoc.reference.path}');
+              print('🔄 New password length: ${newPassword.length}');
+              
+              // Update using document reference
+              final docRef = employeesRef.doc(docId);
+              
+              await docRef.update({
+                'passwordHash': newPassword,
+                'authMethod': authMethod ?? 'direct',
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+              
+              print('✅ Update command sent to Firestore');
+              
+              // Verify the update worked (with retries)
+              bool verified = false;
+              for (int i = 0; i < 3; i++) {
+                await Future.delayed(Duration(milliseconds: 500));
+                final verifyDoc = await docRef.get();
+                
+                if (!verifyDoc.exists) {
+                  print('❌ Document does not exist after update attempt');
+                  break;
+                }
+                
+                final verifyData = verifyDoc.data() as Map<String, dynamic>?;
+                final verifyPassword = verifyData?['passwordHash'] as String?;
+                
+                print('🔍 Verification attempt ${i + 1}/3 - stored password: ${verifyPassword != null ? "***${verifyPassword.length} chars" : "null"}');
+                
+                if (verifyPassword == newPassword) {
+                  verified = true;
+                  print('✅ Password updated in Firestore and verified (primary source)');
+                  break;
+                }
+              }
+              
+              if (!verified) {
+                print('⚠️ Password update verification failed after 3 attempts');
+                print('⚠️ This might be a Firestore security rules issue or network problem');
+                return {
+                  'success': false,
+                  'message': 'Password update may have failed. Please check Firestore Console and security rules. Error: Verification failed',
+                };
+              }
+            } catch (e, stackTrace) {
+              print('❌ Error updating Firestore password: $e');
+              print('❌ Error type: ${e.runtimeType}');
+              print('❌ Stack trace: $stackTrace');
+              
+              // Check if it's a permissions error
+              final errorStr = e.toString().toLowerCase();
+              String errorMessage = 'Error updating password in Firestore: $e';
+              
+              if (errorStr.contains('permission') || errorStr.contains('security')) {
+                errorMessage = 'Permission denied. Check Firestore security rules to allow writes to "employees" collection.';
+              } else if (errorStr.contains('network') || errorStr.contains('connection')) {
+                errorMessage = 'Network error. Please check your internet connection and try again.';
+              }
+              
+              return {
+                'success': false,
+                'message': errorMessage,
+              };
+            }
+            
+            // Update local storage to match Firestore (for sync only, not for login)
+            await prefs.setString('emp_login_id_$userId', newPassword);
+            if (empEmail != null && empEmail.isNotEmpty) {
+              await prefs.setString('emp_login_email_$empEmail', newPassword);
+            }
+            print('✅ Local storage updated to match Firestore');
+            
+            // Update Firebase Auth if they have Firebase Auth account
+            if (authMethod == 'firebase' && empEmail != null && user != null && user.email == empEmail) {
+              try {
+                final credential = EmailAuthProvider.credential(
+                  email: empEmail,
+                  password: currentPassword,
+                );
+                await user.reauthenticateWithCredential(credential);
+                await user.updatePassword(newPassword);
+                await user.reload();
+                print('✅ Password updated in Firebase Auth');
+              } catch (e) {
+                print('⚠️ Could not update Firebase Auth password: $e');
+                // Continue anyway - Firestore password is updated
+              }
+            }
+            
+            return {
+              'success': true,
+              'message': 'Password changed successfully',
+            };
+          } else {
+            return {
+              'success': false,
+              'message': 'Employee account not found in Firestore',
+            };
+          }
+        } catch (e) {
+          print('❌ Error changing employee password: $e');
+          return {
+            'success': false,
+            'message': 'Error changing password: $e',
+          };
+        }
+      }
+      
+      // Handle Admin password change
       // Check if this is a direct Firestore admin (no Firebase Auth user)
       if (user == null && userId != null && userEmail != null) {
         print('🔍 No Firebase Auth user - checking for direct Firestore admin...');
@@ -1592,7 +2091,7 @@ class FirebaseService {
         };
       }
       
-      // Firebase Auth user path
+      // Firebase Auth user path (for admins with Firebase Auth)
       if (user == null) {
         return {
           'success': false,

@@ -41,49 +41,49 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyDCcuTsrEBmZNMwFLciZxbp5sbiJ1RWSvM',
-    appId: '1:933599410604:web:8498099df5984366936209',
-    messagingSenderId: '933599410604',
-    projectId: 'myproject-f9e45',
-    authDomain: 'myproject-f9e45.firebaseapp.com',
-    storageBucket: 'myproject-f9e45.firebasestorage.app',
+    apiKey: 'AIzaSyDCcuTsrEBmZNMwFLciZxbp5sbiJ1RWSvM', // TODO: Update from Firebase Console
+    appId: '1:148043153053:web:your-web-app-id', // TODO: Update from Firebase Console
+    messagingSenderId: '148043153053',
+    projectId: 'fortumars-hrms-63078',
+    authDomain: 'fortumars-hrms-63078.firebaseapp.com',
+    storageBucket: 'fortumars-hrms-63078.firebasestorage.app',
   );
 
   // Web Firebase configuration
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyD95UyPhJf4FpLbZL0kyisx5BnKj5zBPb8',
-    appId: '1:933599410604:android:05eeb09398420971936209',
+    apiKey: 'AIzaSyD95UyPhJf4FpLbZL0kyisx5BnKj5zBPb8', // From google-services.json
+    appId: '1:933599410604:android:05eeb09398420971936209', // From google-services.json
     messagingSenderId: '933599410604',
     projectId: 'myproject-f9e45',
     storageBucket: 'myproject-f9e45.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyAzTK2andyeo0wbwaEMb9z6qfqQ70iMQms',
-    appId: '1:933599410604:ios:afb84f521b0836b8936209',
-    messagingSenderId: '933599410604',
-    projectId: 'myproject-f9e45',
-    storageBucket: 'myproject-f9e45.firebasestorage.app',
-    iosBundleId: 'com.example.flutterApplication1',
+    apiKey: 'AIzaSyDZ7kDPb4S6RSS2OtXwV6GwMB8Y2nn1DAg', // From GoogleService-Info.plist
+    appId: '1:148043153053:ios:f6fa9b2e7d10084c835e74', // From GoogleService-Info.plist
+    messagingSenderId: '148043153053',
+    projectId: 'fortumars-hrms-63078',
+    storageBucket: 'fortumars-hrms-63078.firebasestorage.app',
+    iosBundleId: 'com.fortumars-hrm',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyAzTK2andyeo0wbwaEMb9z6qfqQ70iMQms',
-    appId: '1:933599410604:ios:afb84f521b0836b8936209',
-    messagingSenderId: '933599410604',
-    projectId: 'myproject-f9e45',
-    storageBucket: 'myproject-f9e45.firebasestorage.app',
-    iosBundleId: 'com.example.flutterApplication1',
+    apiKey: 'AIzaSyDZ7kDPb4S6RSS2OtXwV6GwMB8Y2nn1DAg', // From iOS config
+    appId: '1:148043153053:ios:f6fa9b2e7d10084c835e74', // From iOS config
+    messagingSenderId: '148043153053',
+    projectId: 'fortumars-hrms-63078',
+    storageBucket: 'fortumars-hrms-63078.firebasestorage.app',
+    iosBundleId: 'com.fortumars-hrm',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyDCcuTsrEBmZNMwFLciZxbp5sbiJ1RWSvM',
-    appId: '1:933599410604:web:03e831591a8da692936209',
-    messagingSenderId: '933599410604',
-    projectId: 'myproject-f9e45',
-    authDomain: 'myproject-f9e45.firebaseapp.com',
-    storageBucket: 'myproject-f9e45.firebasestorage.app',
+    apiKey: 'AIzaSyDCcuTsrEBmZNMwFLciZxbp5sbiJ1RWSvM', // TODO: Update from Firebase Console
+    appId: '1:148043153053:web:your-web-app-id', // TODO: Update from Firebase Console
+    messagingSenderId: '148043153053',
+    projectId: 'fortumars-hrms-63078',
+    authDomain: 'fortumars-hrms-63078.firebaseapp.com',
+    storageBucket: 'fortumars-hrms-63078.firebasestorage.app',
   );
 
 }

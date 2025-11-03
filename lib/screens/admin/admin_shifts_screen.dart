@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../services/local_storage_service.dart';
+import '../../services/hybrid_storage_service.dart';
 
 class AdminShiftsScreen extends StatefulWidget {
   @override
@@ -31,7 +32,7 @@ class _AdminShiftsScreenState extends State<AdminShiftsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final employees = LocalStorageService.getEmployees();
+    final employees = HybridStorageService.getEmployees();
     final shiftOptions = employees.map((e) => e.shift).toSet().toList();
     return Scaffold(
       backgroundColor: Colors.grey[50],

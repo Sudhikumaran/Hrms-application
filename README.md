@@ -18,7 +18,6 @@ A comprehensive Human Resource Management (HRM) application built with Flutter, 
 - Employee ID-based login system
 - Secure password validation
 - Session management
-- Demo credentials included for testing
 
 ### 📊 Dashboard
 
@@ -129,11 +128,6 @@ The application includes:
    flutter run
    ```
 
-### Demo Credentials
-
-- **Employee ID**: `EMP001`
-- **Password**: `password`
-
 ## 📁 Project Structure
 
 ```
@@ -194,7 +188,7 @@ The application includes sample data for:
 
 1. Launch the application
 2. Wait for the splash screen animation
-3. Login with demo credentials
+3. Sign up or login with your credentials
 
 ### 2. Dashboard Navigation
 

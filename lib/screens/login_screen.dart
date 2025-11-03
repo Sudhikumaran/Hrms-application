@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/local_storage_service.dart';
 import '../services/firebase_service.dart';
 import '../services/hybrid_storage_service.dart';
 import '../utils/login_diagnostics.dart';
 import 'main_screen.dart';
 import 'admin_main_screen.dart';
-import 'create_admin_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/employee.dart';
 
@@ -200,7 +200,36 @@ class _LoginScreenState extends State<LoginScreen> {
             print('🔐 Total stored passwords checked: ${storedPasswords.length}');
             
             if (passwordMatch && matchedKey != null) {
-              print('✅ Password match on key "$matchedKey"! Logging in...');
+              print('✅ Password match on key "$matchedKey"! Migrating to Firestore...');
+              
+              // CRITICAL: This is legacy login - migrate password to Firestore immediately
+              // After migration, all future logins will ONLY check Firestore
+              try {
+                final employeesRef = HybridStorageService.getEmployeesRef();
+                if (employeesRef != null) {
+                  final query = await employeesRef
+                      .where('empId', isEqualTo: found.empId)
+                      .limit(1)
+                      .get();
+                  
+                  if (query.docs.isNotEmpty) {
+                    await query.docs.first.reference.update({
+                      'passwordHash': pwd, // Migrate the password they just entered
+                      'authMethod': 'direct',
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+                    print('✅ Password migrated to Firestore - future logins will use Firestore only');
+                    
+                    // Update local storage to match Firestore
+                    await prefs.setString('emp_login_id_${found.empId}', pwd);
+                    if (found.email != null && found.email!.isNotEmpty) {
+                      await prefs.setString('emp_login_email_${found.email}', pwd);
+                    }
+                  }
+                }
+              } catch (e) {
+                print('⚠️ Could not migrate password to Firestore: $e');
+              }
               
               // Try to create Firebase Auth account for this employee if they don't have one
               // This migrates old accounts to Firebase Auth automatically
@@ -220,18 +249,18 @@ class _LoginScreenState extends State<LoginScreen> {
                     
                     // Don't log as error if it's a configuration issue - this is expected
                     if (errorCode == 'configuration-not-found' || errorCode == 'unknown' || (errorMsg?.contains('configuration') ?? false)) {
-                      print('ℹ️ Firebase Auth not configured - employee will continue using local password login');
+                      print('ℹ️ Firebase Auth not configured - employee will use Firestore password');
                     } else if (errorCode == 'email-already-in-use') {
                       print('ℹ️ Email already has Firebase Auth account - future logins will use Firebase Auth');
                     } else {
                       print('⚠️ Could not create Firebase Auth account: $errorMsg');
                       print('   Error code: ${errorCode ?? "unknown"}');
                     }
-                    // Continue anyway - local password works
+                    // Continue anyway - Firestore password works
                   }
                 } catch (e) {
                   print('⚠️ Error creating Firebase Auth account: $e');
-                  // Continue anyway - local password works
+                  // Continue anyway - Firestore password works
                 }
               }
               
@@ -755,20 +784,6 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ],
                   ),
-                if (_selectedRole == 'Admin')
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      TextButton(
-                        onPressed: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(builder: (_) => CreateAdminScreen()),
-                          );
-                        },
-                        child: Text('Create Admin Account', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1976D2), decoration: TextDecoration.underline)),
-                      ),
-                    ],
-                  ),
                 SizedBox(height: 20),
 
                 // Demo Credentials
@@ -907,11 +922,42 @@ class _EmployeeSignUpScreenState extends State<EmployeeSignUpScreen> {
       email: emailController.text.trim(),
     );
     employees.add(newEmployee);
-    // Save via HybridStorageService (syncs to Firestore)
+    
+    final password = passwordController.text.trim();
+    
+    // Save employee to Firestore WITH password (like admin)
+    // This ensures login works even if Firebase Auth is not configured
+    try {
+      final employeesRef = HybridStorageService.getEmployeesRef();
+      if (employeesRef != null) {
+        // Check if employee already exists
+        final query = await employeesRef
+            .where('empId', isEqualTo: newEmployee.empId)
+            .limit(1)
+            .get();
+        
+        final employeeJson = newEmployee.toJson();
+        // Add password and auth method to Firestore (like admin)
+        employeeJson['passwordHash'] = password;
+        employeeJson['authMethod'] = 'direct'; // Will be upgraded to 'firebase' if Auth succeeds
+        employeeJson['createdAt'] = FieldValue.serverTimestamp();
+        
+        if (query.docs.isNotEmpty) {
+          await query.docs.first.reference.update(employeeJson);
+          print('✅ Updated employee in Firestore with password');
+        } else {
+          await employeesRef.add(employeeJson);
+          print('✅ Created employee in Firestore with password');
+        }
+      }
+    } catch (e) {
+      print('⚠️ Error saving employee to Firestore: $e');
+    }
+    
+    // Save locally as well
     await HybridStorageService.saveEmployee(newEmployee);
     
-    // Create Firebase Authentication account for employee
-    final password = passwordController.text.trim();
+    // Create Firebase Authentication account for employee (optional upgrade)
     if (newEmployee.email != null && newEmployee.email!.isNotEmpty) {
       print('🔐 Creating Firebase Auth account for employee ${newEmployee.empId}...');
       final authResult = await FirebaseService.createEmployeeAccount(
@@ -922,19 +968,36 @@ class _EmployeeSignUpScreenState extends State<EmployeeSignUpScreen> {
       
       if (authResult['success'] == true) {
         print('✅ Firebase Auth account created successfully');
+        // Update Firestore to mark as using Firebase Auth
+        try {
+          final employeesRef = HybridStorageService.getEmployeesRef();
+          if (employeesRef != null) {
+            final query = await employeesRef
+                .where('empId', isEqualTo: newEmployee.empId)
+                .limit(1)
+                .get();
+            if (query.docs.isNotEmpty) {
+              await query.docs.first.reference.update({
+                'authMethod': 'firebase',
+                'firebaseUserId': authResult['uid'],
+              });
+            }
+          }
+        } catch (e) {
+          print('⚠️ Could not update auth method: $e');
+        }
       } else {
         print('⚠️ Firebase Auth account creation failed: ${authResult['message']}');
-        // Still allow signup but user will need to use fallback login
-        // Save password locally as backup
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('emp_login_id_${newEmployee.empId}', password);
-        await prefs.setString('emp_login_email_${newEmployee.email}', password);
+        print('ℹ️ Employee can still login using Firestore password (direct auth)');
+        // Password already saved in Firestore above, so login will work
       }
-    } else {
-      print('⚠️ No email provided, saving password locally only');
-      // Fallback: save password locally if no email
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('emp_login_id_${newEmployee.empId}', password);
+    }
+    
+    // Also save password locally as backup
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('emp_login_id_${newEmployee.empId}', password);
+    if (newEmployee.email != null && newEmployee.email!.isNotEmpty) {
+      await prefs.setString('emp_login_email_${newEmployee.email}', password);
     }
     
     print('✅ Employee registration successful: ${newEmployee.empId}');

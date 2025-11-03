@@ -1,11 +1,18 @@
 import 'package:flutter/material.dart';
 import '../../models/employee.dart';
-import '../../services/local_storage_service.dart';
+import '../../services/hybrid_storage_service.dart';
 
-class AdminEmployeesScreen extends StatelessWidget {
+class AdminEmployeesScreen extends StatefulWidget {
+  @override
+  State<AdminEmployeesScreen> createState() => _AdminEmployeesScreenState();
+}
+
+class _AdminEmployeesScreenState extends State<AdminEmployeesScreen> {
+  bool _isDeleting = false;
+
   @override
   Widget build(BuildContext context) {
-    final employees = LocalStorageService.getEmployees();
+    final employees = HybridStorageService.getEmployees();
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
@@ -13,8 +20,47 @@ class AdminEmployeesScreen extends StatelessWidget {
         title: Text('Employees'),
         backgroundColor: Color(0xFF1976D2),
         foregroundColor: Colors.white,
+        actions: employees.isEmpty ? null : [
+          if (_isDeleting)
+            Padding(
+              padding: EdgeInsets.all(16),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+            )
+          else
+            IconButton(
+              icon: Icon(Icons.delete_sweep),
+              tooltip: 'Delete All Employees',
+              onPressed: employees.isEmpty ? null : () => _showDeleteConfirmation(context),
+            ),
+        ],
       ),
-      body: employees.isEmpty
+      body: _isDeleting
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text(
+                    'Deleting all employees...',
+                    style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Please wait',
+                    style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+                  ),
+                ],
+              ),
+            )
+          : employees.isEmpty
           ? Center(
               child: Text(
                 'No employees found',
@@ -127,7 +173,7 @@ class AdminEmployeesScreen extends StatelessWidget {
                           hourlyRate: employee.hourlyRate,
                           location: employee.location,
                         );
-                        await LocalStorageService.updateEmployee(updated);
+                        await HybridStorageService.saveEmployee(updated);
                         if (context.mounted) Navigator.pop(context);
                       },
                       icon: Icon(Icons.save),
@@ -152,5 +198,277 @@ class AdminEmployeesScreen extends StatelessWidget {
           fillColor: Colors.grey[50],
         ),
       );
+
+  void _showDeleteConfirmation(BuildContext context) {
+    final employees = HybridStorageService.getEmployees();
+    final count = employees.length;
+
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.warning, color: Colors.red, size: 28),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Delete All Employees',
+                  style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Are you absolutely sure you want to delete ALL $count employees?',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              SizedBox(height: 16),
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.red, size: 20),
+                        SizedBox(width: 8),
+                        Text(
+                          'This action will:',
+                          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 8),
+                    Text('• Delete all employees from Firestore'),
+                    Text('• Clear all local employee data'),
+                    Text('• Remove all employee login passwords'),
+                    Text('• This action CANNOT be undone'),
+                  ],
+                ),
+              ),
+              SizedBox(height: 16),
+              TextField(
+                decoration: InputDecoration(
+                  labelText: 'Type "DELETE ALL" to confirm',
+                  border: OutlineInputBorder(),
+                  hintText: 'DELETE ALL',
+                ),
+                onChanged: (value) {
+                  // Store confirmation text for validation
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text('Cancel', style: TextStyle(color: Colors.grey[600])),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                _showFinalConfirmation(context);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+              ),
+              child: Text('Continue'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showFinalConfirmation(BuildContext context) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        final confirmController = TextEditingController();
+        
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Row(
+                children: [
+                  Icon(Icons.dangerous, color: Colors.red, size: 32),
+                  SizedBox(width: 8),
+                  Text(
+                    'Final Confirmation',
+                    style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'This is your LAST chance to cancel.',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  SizedBox(height: 16),
+                  TextField(
+                    controller: confirmController,
+                    decoration: InputDecoration(
+                      labelText: 'Type "DELETE ALL" to proceed',
+                      border: OutlineInputBorder(),
+                      hintText: 'DELETE ALL',
+                      prefixIcon: Icon(Icons.edit),
+                    ),
+                    onChanged: (value) {
+                      setDialogState(() {});
+                    },
+                  ),
+                  SizedBox(height: 16),
+                  Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.warning, color: Colors.red),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'This will permanently delete ALL employee data!',
+                            style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: Text('Cancel', style: TextStyle(color: Colors.grey[600])),
+                ),
+                ElevatedButton(
+                  onPressed: confirmController.text.trim() == 'DELETE ALL'
+                      ? () async {
+                          Navigator.pop(dialogContext);
+                          await _deleteAllEmployees(context);
+                        }
+                      : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: Text('DELETE ALL'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _deleteAllEmployees(BuildContext context) async {
+    setState(() {
+      _isDeleting = true;
+    });
+
+    try {
+      final result = await HybridStorageService.deleteAllEmployees();
+
+      setState(() {
+        _isDeleting = false;
+      });
+
+      if (!context.mounted) return;
+
+      if (result['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result['message'] ?? 'All employees deleted successfully',
+              style: TextStyle(color: Colors.white),
+            ),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result['message'] ?? 'Error deleting employees',
+              style: TextStyle(color: Colors.white),
+            ),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'Details',
+              textColor: Colors.white,
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (dialogContext) => AlertDialog(
+                    title: Text('Delete Operation Details'),
+                    content: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('Deleted: ${result['deletedCount'] ?? 0} employees'),
+                          if (result['errors'] != null && (result['errors'] as List).isNotEmpty) ...[
+                            SizedBox(height: 16),
+                            Text('Errors:', style: TextStyle(fontWeight: FontWeight.bold)),
+                            ...((result['errors'] as List).map((e) => Padding(
+                              padding: EdgeInsets.only(top: 4),
+                              child: Text('• $e', style: TextStyle(color: Colors.red)),
+                            ))),
+                          ],
+                        ],
+                      ),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialogContext),
+                        child: Text('OK'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() {
+        _isDeleting = false;
+      });
+
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Error deleting employees: $e',
+            style: TextStyle(color: Colors.white),
+          ),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 5),
+        ),
+      );
+    }
+  }
 }
 

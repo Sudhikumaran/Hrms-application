@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import '../models/employee.dart';
 import '../services/location_service.dart';
 import '../services/local_storage_service.dart';
+import '../services/hybrid_storage_service.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/attendance_record.dart';
@@ -37,6 +38,554 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   bool _completedToday = false;
   String? _lastCompletedDate;
 
+  // Helper methods - declared early to avoid forward reference issues
+  String _calculateHours() {
+    if (_checkInRaw == null) return '0.0';
+    final now = DateTime.now();
+    int runningBreak = _breakAccumulatedMs;
+    if (_onBreak && _breakStart != null) {
+      runningBreak += now.difference(_breakStart!).inMilliseconds;
+    }
+    final workedMs = now.difference(_checkInRaw!).inMilliseconds - runningBreak;
+    final hours = (workedMs / (1000 * 60 * 60)).clamp(0, 24).toDouble();
+    return hours.toStringAsFixed(1);
+  }
+
+  String _formatBreakDuration() {
+    int totalSeconds = (_breakAccumulatedMs ~/ 1000);
+    if (_onBreak && _breakStart != null) {
+      totalSeconds += DateTime.now().difference(_breakStart!).inSeconds;
+    }
+    final h = (totalSeconds ~/ 3600).toString();
+    final m = (totalSeconds ~/ 60).toString().padLeft(2, '0');
+    final s = (totalSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  void _startBreakTicker() {
+    _breakTicker?.cancel();
+    _breakTicker = Timer.periodic(Duration(seconds: 1), (_) {
+      if (!_onBreak) {
+        _breakTicker?.cancel();
+        return;
+      }
+      if (mounted) setState(() {});
+    });
+  }
+
+  Widget _buildSummaryItem(
+    String title,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
+    return Container(
+      padding: EdgeInsets.all(12),
+      margin: EdgeInsets.symmetric(horizontal: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 24),
+          SizedBox(height: 6),
+          Text(title, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+          Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: color)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHistoryItem(String date, String time, String hours, String status, Color statusColor) {
+    return Container(
+      margin: EdgeInsets.only(bottom: 10),
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4, offset: Offset(0, 2))],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 4,
+            height: 50,
+            decoration: BoxDecoration(
+              color: statusColor,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(date, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                SizedBox(height: 4),
+                Text(time, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(hours, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              SizedBox(height: 4),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(status, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<List<AttendanceRecord>> _getAllMyAttendance() async {
+    final empId = LocalStorageService.getUserId() ?? '';
+    await LocalStorageService.init();
+    return HybridStorageService.getAttendance(empId);
+  }
+
+  Future<void> _startBreak() async {
+    if (_onBreak) return;
+    _onBreak = true;
+    _breakStart = DateTime.now();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('break_start_${userId}_$_todayDate', _breakStart!.toIso8601String());
+    _startBreakTicker();
+    setState(() {});
+  }
+
+  Future<void> _endBreak() async {
+    if (_onBreak && _breakStart != null) {
+      _breakAccumulatedMs += DateTime.now().difference(_breakStart!).inMilliseconds;
+    }
+    _onBreak = false;
+    _breakStart = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('break_start_${userId}_$_todayDate');
+    await prefs.setInt('break_acc_${userId}_$_todayDate', _breakAccumulatedMs);
+    _breakTicker?.cancel();
+    setState(() {});
+  }
+
+  void _chooseCheckInMode() {
+    final todayKey = _todayDate;
+    if (_lastCompletedDate != todayKey && _completedToday) {
+      setState(() {
+        _completedToday = false;
+      });
+    }
+    if (_completedToday && _lastCompletedDate == todayKey) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Already Checked Out'),
+          content: Text('You have already completed your shift today. Please check in on your next shift.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Choose Check-In Mode', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                SizedBox(height: 12),
+                Row(children:[
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        setState(()=> _isWfh = false);
+                        _checkInByLocation(); // Office: location + OTP
+                      },
+                      icon: Icon(Icons.apartment),
+                      label: Text('Office'),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        setState(()=> _isWfh = true);
+                        _showOtpDialogWfh(); // WFH: OTP only
+                      },
+                      icon: Icon(Icons.home),
+                      label: Text('WFH'),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                    ),
+                  ),
+                ]),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showOtpDialogWfh() {
+    final otp = (100000 + (DateTime.now().millisecondsSinceEpoch % 900000)).toString();
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('OTP Verification (WFH)'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Enter the OTP below to Check In.'),
+            SizedBox(height: 8),
+            Row(children:[
+              Text('OTP: ', style: TextStyle(fontWeight: FontWeight.bold)),
+              SelectableText(otp, style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 18)),
+            ]),
+            SizedBox(height: 16),
+            TextField(
+              controller: ctrl,
+              decoration: InputDecoration(labelText: 'Enter OTP'),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              if (ctrl.text == otp) {
+                Navigator.pop(context);
+                _performCheckIn('WFH + OTP');
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid OTP'), backgroundColor: Colors.red));
+              }
+            },
+            child: Text('Check In'),
+          ),
+          TextButton(onPressed: ()=>Navigator.pop(context), child: Text('Cancel')),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _checkOut() async {
+    // Determine WFH from today's saved record to be robust even if state resets
+    bool isWfhToday = _isWfh;
+    final empId = LocalStorageService.getUserId();
+    if (empId != null) {
+      final todayRecs = HybridStorageService.getAttendance(empId).where((r) => r.date == _todayDate).toList();
+      if (todayRecs.isNotEmpty) {
+        final st = todayRecs.first.status.toUpperCase();
+        isWfhToday = st == 'WFH';
+        _isWfh = isWfhToday;
+      }
+    }
+    // If WFH, OTP only (no location)
+    if (isWfhToday) {
+      _showOtpDialogCheckOutWfh();
+      return;
+    }
+    // Office: Fetch location and verify before allowing check out
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('Location Verification'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Fetching your location...'),
+          ],
+        ),
+      ),
+    );
+    try {
+      Position position;
+      try {
+        position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      } catch (e) {
+        position = Position(
+          latitude: 0.0, longitude: 0.0,
+          accuracy: 0, altitude: 0, heading: 0, speed: 0, speedAccuracy: 0, timestamp: DateTime.now(), altitudeAccuracy: 0, headingAccuracy: 0
+        );
+      }
+      final currentLocation = Location(lat: position.latitude, lng: position.longitude);
+      final isWithinRange = await LocationService.isWithinOfficeRange(currentLocation);
+      if (!mounted) return;
+      Navigator.pop(context);
+      if (isWithinRange) {
+        _showOtpDialogCheckOut();
+      } else {
+        final officeLocation = await LocationService.getOfficeLocation();
+        final rawDistance = officeLocation != null
+            ? LocationService.calculateDistance(currentLocation, officeLocation)
+            : 0.0;
+        final distanceStr = (rawDistance.isFinite ? rawDistance : 0.0).toStringAsFixed(0);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('You are ${distanceStr}m away. Please be within 150m to check out.'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  void _showOtpDialogCheckOut() {
+    final otp = (100000 + (DateTime.now().millisecondsSinceEpoch % 900000)).toString();
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('OTP Verification'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Enter the OTP below to Check Out.'),
+            SizedBox(height: 8),
+            Row(children:[
+              Text('OTP: ', style: TextStyle(fontWeight: FontWeight.bold)),
+              SelectableText(otp, style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 18)),
+            ]),
+            SizedBox(height: 16),
+            TextField(
+              controller: ctrl,
+              decoration: InputDecoration(labelText: 'Enter OTP'),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              if (ctrl.text == otp) {
+                Navigator.pop(context);
+                _handleCheckoutWarnings(() => _doCheckOut());
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid OTP'), backgroundColor: Colors.red));
+              }
+            },
+            child: Text('Check Out'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showOtpDialogCheckOutWfh() {
+    final otp = (100000 + (DateTime.now().millisecondsSinceEpoch % 900000)).toString();
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('OTP Verification (WFH)'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Enter the OTP below to Check Out.'),
+            SizedBox(height: 8),
+            Row(children:[
+              Text('OTP: ', style: TextStyle(fontWeight: FontWeight.bold)),
+              SelectableText(otp, style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 18)),
+            ]),
+            SizedBox(height: 16),
+            TextField(
+              controller: ctrl,
+              decoration: InputDecoration(labelText: 'Enter OTP'),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              if (ctrl.text == otp) {
+                Navigator.pop(context);
+                _handleCheckoutWarnings(() => _doCheckOut());
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid OTP'), backgroundColor: Colors.red));
+              }
+            },
+            child: Text('Check Out'),
+          ),
+          TextButton(onPressed: ()=>Navigator.pop(context), child: Text('Cancel')),
+        ],
+      ),
+    );
+  }
+
+  void _handleCheckoutWarnings(VoidCallback onProceed) {
+    final shiftEnd = _getShiftEndDate();
+    if (shiftEnd == null) {
+      onProceed();
+      return;
+    }
+    final now = DateTime.now();
+    final earlyMinutes = shiftEnd.difference(now).inMinutes;
+    // early checkout if before shift end or if total worked < 7.5h (~450 min)
+    final totalWorked = _checkInRaw != null ? now.difference(_checkInRaw!).inMinutes : 0;
+    final isEarly = earlyMinutes > 0 || totalWorked < 450;
+    if (isEarly) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Early Checkout'),
+          content: Text('You are checking out early. Worked ${totalWorked} mins. Proceed?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel')),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                onProceed();
+              },
+              child: Text('Continue'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    final overtimeMinutes = now.difference(shiftEnd).inMinutes;
+    if (overtimeMinutes > 10) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Overtime'),
+          content: Text('Great work! You have worked $overtimeMinutes minutes overtime.'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                onProceed();
+              },
+              child: Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    onProceed();
+  }
+
+  DateTime? _getShiftEndDate() {
+    final shift = _employee?.shift ?? '';
+    final times = RegExp(r'(\d{1,2}:\d{2}\s?[AP]M)').allMatches(shift).map((m) => m.group(0)!).toList();
+    if (times.length < 2) {
+      // Default shift 9 AM - 6 PM
+      final today = DateTime.now();
+      return DateTime(today.year, today.month, today.day, 18, 0);
+    }
+    final today = DateTime.now();
+    final formatter = DateFormat('h:mm a');
+    DateTime start;
+    DateTime end;
+    try {
+      final parsedStart = formatter.parse(times[0]);
+      final parsedEnd = formatter.parse(times[1]);
+      start = DateTime(today.year, today.month, today.day, parsedStart.hour, parsedStart.minute);
+      end = DateTime(today.year, today.month, today.day, parsedEnd.hour, parsedEnd.minute);
+      if (!end.isAfter(start)) {
+        end = end.add(Duration(days: 1));
+      }
+    } catch (_) {
+      return DateTime(today.year, today.month, today.day, 18, 0);
+    }
+    return end;
+  }
+
+  Future<void> _doCheckOut() async {
+    setState(() {
+      isCheckedIn = false;
+      checkInTime = null;
+      _completedToday = true;
+    });
+    _persistCheckInStatus(false);
+    // Update today's attendance record with checkout and hours
+    final empId = LocalStorageService.getUserId();
+    if (empId != null) {
+      final today = DateFormat('yyyyMMdd').format(DateTime.now());
+      final records = HybridStorageService.getAttendance(empId);
+      final idx = records.indexWhere((r) => r.date == today);
+      if (idx >= 0) {
+        final r = records[idx];
+        final startIsoKey = 'attendance_checkin_raw_${empId}_$today';
+        final prefs = await SharedPreferences.getInstance();
+        final raw = prefs.getString(startIsoKey);
+        DateTime? start = raw != null ? DateTime.tryParse(raw) : null;
+        int breakMs = prefs.getInt('break_acc_${empId}_$today') ?? 0;
+        if (start != null) {
+          final workedMs = DateTime.now().difference(start).inMilliseconds - breakMs;
+          final hours = (workedMs / (1000 * 60 * 60)).clamp(0, 24).toDouble();
+          final updated = AttendanceRecord(
+            date: r.date,
+            checkIn: r.checkIn,
+            checkOut: DateFormat('HH:mm').format(DateTime.now()),
+            status: r.status,
+            hours: hours,
+            location: r.location,
+            method: r.method,
+          );
+          await HybridStorageService.saveAttendance(empId, updated);
+        }
+      }
+      final prefs2 = await SharedPreferences.getInstance();
+      prefs2.setBool('attendance_completed_${empId}_$today', true);
+      prefs2.setString('attendance_last_completed_$empId', today);
+      if (mounted) {
+        setState(() {
+          _lastCompletedDate = today;
+        });
+      }
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Checked out successfully'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -45,33 +594,124 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   Future<void> _restoreCheckInStatus() async {
     await LocalStorageService.init();
+    await HybridStorageService.init(); // Ensure HybridStorageService is initialized
+    
     userId = LocalStorageService.getUserId();
     if (userId == null) return;
+    
+    // CRITICAL: Sync attendance from Firestore first (if online) to get latest check-in data
+    if (HybridStorageService.isOnline) {
+      try {
+        print('🔄 Syncing attendance from Firestore before restoring check-in status...');
+        await HybridStorageService.syncAttendanceFromFirestore(userId!);
+        print('✅ Attendance synced from Firestore');
+      } catch (e) {
+        print('⚠️ Could not sync attendance from Firestore: $e');
+      }
+    }
+    
     // Load employee profile for shift info
-    final emps = LocalStorageService.getEmployees();
+    final emps = HybridStorageService.getEmployees();
     _employee = emps.firstWhere((e) => e.empId == userId, orElse: () => Employee(
       empId: userId!, name: '', role: '', department: '', shift: 'Morning (9:00 AM - 6:00 PM)', status: '', hourlyRate: 0, location: null, email: null
     ));
     _expectedCheckInLabel = _buildExpectedLabel(_employee?.shift ?? 'Morning (9:00 AM - 6:00 PM)');
+    
     final prefs = await SharedPreferences.getInstance();
+    
+    // Step 1: Try to restore from SharedPreferences first
+    bool restoredFromPrefs = false;
+    final prefCheckedIn = prefs.getBool('attendance_checked_in_${userId}_$_todayDate') ?? false;
+    final prefCheckInTime = prefs.getString('attendance_checkin_time_${userId}_$_todayDate');
+    final prefCheckInRaw = prefs.getString('attendance_checkin_raw_${userId}_$_todayDate');
+    
+    if (prefCheckedIn && prefCheckInTime != null && prefCheckInRaw != null) {
+      restoredFromPrefs = true;
+      setState(() {
+        isCheckedIn = true;
+        checkInTime = prefCheckInTime;
+        _checkInRaw = DateTime.tryParse(prefCheckInRaw);
+      });
+      print('✅ Restored check-in from SharedPreferences: $checkInTime');
+    }
+    
+    // Step 2: Also check attendance records (more reliable, syncs with Firestore)
+    final userIdNonNull = userId!;
+    final todayRecords = HybridStorageService.getAttendance(userIdNonNull)
+        .where((r) => r.date == _todayDate && r.checkIn != null && r.checkIn!.isNotEmpty)
+        .toList();
+    
+    if (todayRecords.isNotEmpty) {
+      final todayRecord = todayRecords.first;
+      final hasCheckIn = todayRecord.checkIn != null && todayRecord.checkIn!.isNotEmpty;
+      final hasCheckOut = todayRecord.checkOut != null && todayRecord.checkOut!.isNotEmpty;
+      
+      // If we have check-in but no check-out, we're still checked in
+      if (hasCheckIn && !hasCheckOut) {
+        // Restore from attendance record (this is the source of truth)
+        final checkInTimeStr = todayRecord.checkIn!;
+        
+        // Parse check-in time to DateTime
+        DateTime? checkInDateTime;
+        try {
+          // Try to parse HH:mm format
+          final parts = checkInTimeStr.split(':');
+          if (parts.length >= 2) {
+            final hour = int.parse(parts[0]);
+            final minute = int.parse(parts[1]);
+            final now = DateTime.now();
+            checkInDateTime = DateTime(now.year, now.month, now.day, hour, minute);
+          }
+        } catch (e) {
+          print('⚠️ Could not parse check-in time: $checkInTimeStr');
+        }
+        
+        // Update state from attendance record (attendance record is source of truth)
+        setState(() {
+          isCheckedIn = true;
+          checkInTime = checkInTimeStr;
+          if (checkInDateTime != null) {
+            _checkInRaw = checkInDateTime;
+          }
+        });
+        
+        // Also update SharedPreferences to match attendance record
+        if (checkInDateTime != null) {
+          await prefs.setBool('attendance_checked_in_${userId}_$_todayDate', true);
+          await prefs.setString('attendance_checkin_time_${userId}_$_todayDate', checkInTimeStr);
+          await prefs.setString('attendance_checkin_raw_${userId}_$_todayDate', checkInDateTime.toIso8601String());
+        }
+        
+        print('✅ Restored check-in from attendance record: $checkInTimeStr');
+        
+        // Restore WFH status
+        _isWfh = todayRecord.status.toUpperCase() == 'WFH';
+      } else if (!restoredFromPrefs) {
+        // No check-in found, ensure state is cleared
+        setState(() {
+          isCheckedIn = false;
+          checkInTime = null;
+          _checkInRaw = null;
+        });
+      }
+    } else if (!restoredFromPrefs) {
+      // No attendance record and no SharedPreferences - not checked in
+      setState(() {
+        isCheckedIn = false;
+        checkInTime = null;
+        _checkInRaw = null;
+      });
+    }
+    
+    // Restore other state
     setState(() {
-      isCheckedIn = prefs.getBool('attendance_checked_in_${userId}_$_todayDate') ?? false;
-      checkInTime = prefs.getString('attendance_checkin_time_${userId}_$_todayDate');
-      final raw = prefs.getString('attendance_checkin_raw_${userId}_$_todayDate');
-      _checkInRaw = raw != null ? DateTime.tryParse(raw) : null;
       _completedToday = prefs.getBool('attendance_completed_${userId}_$_todayDate') ?? false;
       _lastCompletedDate = prefs.getString('attendance_last_completed_${userId}');
     });
-    // Restore WFH status from today's attendance record
-    if (userId != null) {
-      final todayRecords = LocalStorageService.getAttendance(userId!).where((r) => r.date == _todayDate).toList();
-      if (todayRecords.isNotEmpty) {
-        _isWfh = (todayRecords.first.status ?? '').toUpperCase() == 'WFH';
-      }
-    }
     // Restore break state
-    _breakAccumulatedMs = prefs.getInt('break_acc_${userId}_$_todayDate') ?? 0;
-    final startIso = prefs.getString('break_start_${userId}_$_todayDate');
+    final userIdForBreak = userId ?? '';
+    _breakAccumulatedMs = prefs.getInt('break_acc_${userIdForBreak}_$_todayDate') ?? 0;
+    final startIso = prefs.getString('break_start_${userIdForBreak}_$_todayDate');
     if (startIso != null && startIso.isNotEmpty) {
       _breakStart = DateTime.tryParse(startIso);
       _onBreak = _breakStart != null;
@@ -259,7 +899,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       duration: Duration(milliseconds: 300),
                       child: ElevatedButton(
                         onPressed: isCheckedIn
-                            ? _checkOut
+                            ? () => _checkOut()
                             : _chooseCheckInMode,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.white,
@@ -453,15 +1093,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           children: records.map((r) {
                             final date = r.date;
                             String displayDate = '--';
-                            if (date != null && date.length == 8 && int.tryParse(date) != null) {
+                            if (date.length == 8 && int.tryParse(date) != null) {
                               displayDate = '${date.substring(6, 8)}-${date.substring(4, 6)}-${date.substring(0, 4)}';
-                            } else if (date != null) {
+                            } else {
                               displayDate = date;
                             }
                             final checkIn = r.checkIn ?? '--:--';
                             final checkOut = r.checkOut ?? '--:--';
                             final hours = r.hours.toStringAsFixed(2);
-                            final statusRaw = r.status ?? '--';
+                            final statusRaw = r.status;
                             final statusUpper = statusRaw.toUpperCase();
                             Color color;
                             String displayStatus;
@@ -469,15 +1109,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                               case 'PRESENT':
                                 color = Colors.green;
                                 displayStatus = 'Present';
-                                break;
                               case 'LATE':
                                 color = Colors.orange;
                                 displayStatus = 'Late';
-                                break;
                               case 'WFH':
                                 color = Colors.purple;
                                 displayStatus = 'WFH';
-                                break;
                               default:
                                 color = Colors.red;
                                 displayStatus = 'Absent';
@@ -500,7 +1137,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     );
   }
 
-  void _checkInByLocation() async {
+  Future<void> _checkInByLocation() async {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -530,6 +1167,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       }
       final currentLocation = Location(lat: position.latitude, lng: position.longitude);
       final isWithinRange = await LocationService.isWithinOfficeRange(currentLocation);
+      if (!mounted) return;
       Navigator.pop(context);
       if (isWithinRange) {
         _showOtpDialog();
@@ -539,6 +1177,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             ? LocationService.calculateDistance(currentLocation, officeLocation)
             : 0.0;
         final distanceStr = (rawDistance.isFinite ? rawDistance : 0.0).toStringAsFixed(0);
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('You are ${distanceStr}m away. Please be within 150m to check in.'),
@@ -548,7 +1187,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
       Navigator.pop(context);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
       );
@@ -601,7 +1242,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     );
   }
 
-  void _performCheckIn(String method) {
+  Future<void> _performCheckIn(String method) async {
     setState(() {
       isCheckedIn = true;
       checkInTime = TimeOfDay.now().format(context);
@@ -621,576 +1262,22 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         location: _isWfh ? 'Home' : 'Office',
         method: method,
       );
-      LocalStorageService.upsertAttendance(empId, record);
+      await HybridStorageService.saveAttendance(empId, record);
       SharedPreferences.getInstance().then((prefs) {
         prefs.setBool('attendance_completed_${empId}_$today', false);
-        prefs.setString('attendance_last_completed_${empId}', today);
+        prefs.setString('attendance_last_completed_$empId', today);
         _lastCompletedDate = today;
       });
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Checked in (${_expectedCheckInLabel ?? 'Shift'}) via $method'),
-        backgroundColor: Colors.green,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  // Let user choose Office vs WFH on check-in
-  void _chooseCheckInMode() {
-    final todayKey = _todayDate;
-    if (_lastCompletedDate != todayKey && _completedToday) {
-      setState(() {
-        _completedToday = false;
-      });
-    }
-    if (_completedToday && _lastCompletedDate == todayKey) {
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text('Already Checked Out'),
-          content: Text('You have already completed your shift today. Please check in on your next shift.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: Text('OK')),
-          ],
-        ),
-      );
-      return;
-    }
-    showModalBottomSheet(
-      context: context,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) {
-        return SafeArea(
-          child: Padding(
-            padding: EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Choose Check-In Mode', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                SizedBox(height: 12),
-                Row(children:[
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        setState(()=> _isWfh = false);
-                        _checkInByLocation(); // Office: location + OTP
-                      },
-                      icon: Icon(Icons.apartment),
-                      label: Text('Office'),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                    ),
-                  ),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        setState(()=> _isWfh = true);
-                        _showOtpDialogWfh(); // WFH: OTP only
-                      },
-                      icon: Icon(Icons.home),
-                      label: Text('WFH'),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-                    ),
-                  ),
-                ]),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  void _showOtpDialogWfh() {
-    final otp = (100000 + (DateTime.now().millisecondsSinceEpoch % 900000)).toString();
-    final ctrl = TextEditingController();
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: Text('OTP Verification (WFH)'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Enter the OTP below to Check In.'),
-            SizedBox(height: 8),
-            Row(children:[
-              Text('OTP: ', style: TextStyle(fontWeight: FontWeight.bold)),
-              SelectableText(otp, style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 18)),
-            ]),
-            SizedBox(height: 16),
-            TextField(
-              controller: ctrl,
-              decoration: InputDecoration(labelText: 'Enter OTP'),
-              keyboardType: TextInputType.number,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              if (ctrl.text == otp) {
-                Navigator.pop(context);
-                _performCheckIn('WFH + OTP');
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid OTP'), backgroundColor: Colors.red));
-              }
-            },
-            child: Text('Check In'),
-          ),
-          TextButton(onPressed: ()=>Navigator.pop(context), child: Text('Cancel')),
-        ],
-      ),
-    );
-  }
-
-  // Offline check-in removed per requirement
-
-  void _checkOut() async {
-    // Determine WFH from today's saved record to be robust even if state resets
-    bool isWfhToday = _isWfh;
-    final empId = LocalStorageService.getUserId();
-    if (empId != null) {
-      final todayRecs = LocalStorageService.getAttendance(empId).where((r)=> r.date == _todayDate).toList();
-      if (todayRecs.isNotEmpty) {
-        final st = (todayRecs.first.status ?? '').toUpperCase();
-        isWfhToday = st == 'WFH';
-        _isWfh = isWfhToday;
-      }
-    }
-    // If WFH, OTP only (no location)
-    if (isWfhToday) {
-      _showOtpDialogCheckOutWfh();
-      return;
-    }
-    // Office: Fetch location and verify before allowing check out
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: Text('Location Verification'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Fetching your location...'),
-          ],
-        ),
-      ),
-    );
-    try {
-      Position position;
-      try {
-        position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
-      } catch (e) {
-        position = Position(
-          latitude: 0.0, longitude: 0.0,
-          accuracy: 0, altitude: 0, heading: 0, speed: 0, speedAccuracy: 0, timestamp: DateTime.now(), altitudeAccuracy: 0, headingAccuracy: 0
-        );
-      }
-      final currentLocation = Location(lat: position.latitude, lng: position.longitude);
-      final isWithinRange = await LocationService.isWithinOfficeRange(currentLocation);
-      Navigator.pop(context);
-      if (isWithinRange) {
-        _showOtpDialogCheckOut();
-      } else {
-        final officeLocation = await LocationService.getOfficeLocation();
-        final rawDistance = officeLocation != null
-            ? LocationService.calculateDistance(currentLocation, officeLocation)
-            : 0.0;
-        final distanceStr = (rawDistance.isFinite ? rawDistance : 0.0).toStringAsFixed(0);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('You are ${distanceStr}m away. Please be within 150m to check out.'),
-            backgroundColor: Colors.red,
-            duration: Duration(seconds: 5),
-          ),
-        );
-      }
-    } catch (e) {
-      Navigator.pop(context);
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-      );
-    }
-  }
-
-  void _showOtpDialogCheckOut() {
-    final otp = (100000 + (DateTime.now().millisecondsSinceEpoch % 900000)).toString();
-    final ctrl = TextEditingController();
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: Text('OTP Verification'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Enter the OTP below to Check Out.'),
-            SizedBox(height: 8),
-            Row(children:[
-              Text('OTP: ', style: TextStyle(fontWeight: FontWeight.bold)),
-              SelectableText(otp, style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 18)),
-            ]),
-            SizedBox(height: 16),
-            TextField(
-              controller: ctrl,
-              decoration: InputDecoration(labelText: 'Enter OTP'),
-              keyboardType: TextInputType.number,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              if (ctrl.text == otp) {
-                Navigator.pop(context);
-                _handleCheckoutWarnings(_doCheckOut);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid OTP'), backgroundColor: Colors.red));
-              }
-            },
-            child: Text('Check Out'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showOtpDialogCheckOutWfh() {
-    final otp = (100000 + (DateTime.now().millisecondsSinceEpoch % 900000)).toString();
-    final ctrl = TextEditingController();
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: Text('OTP Verification (WFH)'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Enter the OTP below to Check Out.'),
-            SizedBox(height: 8),
-            Row(children:[
-              Text('OTP: ', style: TextStyle(fontWeight: FontWeight.bold)),
-              SelectableText(otp, style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 18)),
-            ]),
-            SizedBox(height: 16),
-            TextField(
-              controller: ctrl,
-              decoration: InputDecoration(labelText: 'Enter OTP'),
-              keyboardType: TextInputType.number,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              if (ctrl.text == otp) {
-                Navigator.pop(context);
-                _handleCheckoutWarnings(_doCheckOut);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid OTP'), backgroundColor: Colors.red));
-              }
-            },
-            child: Text('Check Out'),
-          ),
-          TextButton(onPressed: ()=>Navigator.pop(context), child: Text('Cancel')),
-        ],
-      ),
-    );
-  }
-
-  void _handleCheckoutWarnings(VoidCallback onProceed) {
-    final shiftEnd = _getShiftEndDate();
-    if (shiftEnd == null) {
-      onProceed();
-      return;
-    }
-    final now = DateTime.now();
-    final earlyMinutes = shiftEnd.difference(now).inMinutes;
-    // early checkout if before shift end or if total worked < 7.5h (~450 min)
-    final totalWorked = _checkInRaw != null ? now.difference(_checkInRaw!).inMinutes : 0;
-    final isEarly = earlyMinutes > 0 || totalWorked < 450;
-    if (isEarly) {
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text('Early Checkout'),
-          content: Text('You are checking out early. Worked ${totalWorked} mins. Proceed?'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel')),
-            TextButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                onProceed();
-              },
-              child: Text('Continue'),
-            ),
-          ],
+        SnackBar(
+          content: Text('Checked in (${_expectedCheckInLabel ?? 'Shift'}) via $method'),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
         ),
       );
-      return;
     }
-    final overtimeMinutes = now.difference(shiftEnd).inMinutes;
-    if (overtimeMinutes > 10) {
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text('Overtime'),
-          content: Text('Great work! You have worked $overtimeMinutes minutes overtime.'),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                onProceed();
-              },
-              child: Text('OK'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-    onProceed();
-  }
-
-  DateTime? _getShiftEndDate() {
-    final shift = _employee?.shift ?? '';
-    final times = RegExp(r'(\d{1,2}:\d{2}\s?[AP]M)').allMatches(shift).map((m) => m.group(0)!).toList();
-    if (times.length < 2) {
-      // Default shift 9 AM - 6 PM
-      final today = DateTime.now();
-      return DateTime(today.year, today.month, today.day, 18, 0);
-    }
-    final today = DateTime.now();
-    final formatter = DateFormat('h:mm a');
-    DateTime start;
-    DateTime end;
-    try {
-      final parsedStart = formatter.parse(times[0]);
-      final parsedEnd = formatter.parse(times[1]);
-      start = DateTime(today.year, today.month, today.day, parsedStart.hour, parsedStart.minute);
-      end = DateTime(today.year, today.month, today.day, parsedEnd.hour, parsedEnd.minute);
-      if (!end.isAfter(start)) {
-        end = end.add(Duration(days: 1));
-      }
-    } catch (_) {
-      return DateTime(today.year, today.month, today.day, 18, 0);
-    }
-    return end;
-  }
-
-  void _doCheckOut() {
-    setState(() {
-      isCheckedIn = false;
-      checkInTime = null;
-      _completedToday = true;
-    });
-    _persistCheckInStatus(false);
-    // Update today's attendance record with checkout and hours
-    final empId = LocalStorageService.getUserId();
-    if (empId != null) {
-      final today = DateFormat('yyyyMMdd').format(DateTime.now());
-      final records = LocalStorageService.getAttendance(empId);
-      final idx = records.indexWhere((r) => r.date == today);
-      if (idx >= 0) {
-        final r = records[idx];
-        final startIsoKey = 'attendance_checkin_raw_${empId}_$today';
-        SharedPreferences.getInstance().then((prefs){
-          final raw = prefs.getString(startIsoKey);
-          DateTime? start = raw!=null?DateTime.tryParse(raw):null;
-          int breakMs = prefs.getInt('break_acc_${empId}_$today') ?? 0;
-          if (start != null) {
-            final workedMs = DateTime.now().difference(start).inMilliseconds - breakMs;
-            final hours = (workedMs / (1000*60*60)).clamp(0, 24).toDouble();
-            final updated = AttendanceRecord(
-              date: r.date,
-              checkIn: r.checkIn,
-              checkOut: DateFormat('HH:mm').format(DateTime.now()),
-              status: r.status,
-              hours: hours,
-              location: r.location,
-              method: r.method,
-            );
-            LocalStorageService.upsertAttendance(empId, updated);
-          }
-        });
-      }
-      SharedPreferences.getInstance().then((prefs) {
-        prefs.setBool('attendance_completed_${empId}_$today', true);
-        prefs.setString('attendance_last_completed_${empId}', today);
-        _lastCompletedDate = today;
-      });
-    }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Checked out successfully'),
-        backgroundColor: Colors.red,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  String _calculateHours() {
-    if (_checkInRaw == null) return '0.0';
-    final now = DateTime.now();
-    int runningBreak = _breakAccumulatedMs;
-    if (_onBreak && _breakStart != null) {
-      runningBreak += now.difference(_breakStart!).inMilliseconds;
-    }
-    final workedMs = now.difference(_checkInRaw!).inMilliseconds - runningBreak;
-    final hours = workedMs / (1000 * 60 * 60);
-    return hours.toStringAsFixed(1);
-  }
-
-  String _formatBreakDuration() {
-    int ms = _breakAccumulatedMs;
-    if (_onBreak && _breakStart != null) {
-      ms += DateTime.now().difference(_breakStart!).inMilliseconds;
-    }
-    // Display as MM:SS (minutes:seconds)
-    final totalSeconds = (ms / 1000).floor();
-    final m = (totalSeconds ~/ 60).toString().padLeft(2, '0');
-    final s = (totalSeconds % 60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
-
-  Future<void> _startBreak() async {
-    if (_onBreak) return;
-    _onBreak = true;
-    _breakStart = DateTime.now();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('break_start_${userId}_$_todayDate', _breakStart!.toIso8601String());
-    _startBreakTicker();
-    setState(() {});
-  }
-
-  Future<void> _endBreak() async {
-    if (_onBreak && _breakStart != null) {
-      _breakAccumulatedMs += DateTime.now().difference(_breakStart!).inMilliseconds;
-    }
-    _onBreak = false;
-    _breakStart = null;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('break_start_${userId}_$_todayDate');
-    await prefs.setInt('break_acc_${userId}_$_todayDate', _breakAccumulatedMs);
-    _breakTicker?.cancel();
-    setState(() {});
-  }
-
-  void _startBreakTicker() {
-    _breakTicker?.cancel();
-    _breakTicker = Timer.periodic(Duration(seconds: 1), (_) {
-      if (!_onBreak) {
-        _breakTicker?.cancel();
-        return;
-      }
-      if (mounted) setState(() {});
-    });
-  }
-
-  @override
-  void dispose() {
-    _breakTicker?.cancel();
-    super.dispose();
-  }
-
-  Widget _buildSummaryItem(
-    String title,
-    String value,
-    IconData icon,
-    Color color,
-  ) {
-    return Column(
-      children: [
-        Icon(icon, color: color, size: 24),
-        SizedBox(height: 8),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-            color: Colors.black87,
-          ),
-        ),
-        Text(title, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-      ],
-    );
-  }
-
-  Widget _buildHistoryItem(
-    String date,
-    String time,
-    String hours,
-    String status,
-    Color statusColor,
-  ) {
-    return Padding(
-      padding: EdgeInsets.all(15),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  date,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                Text(
-                  time,
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                hours,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  status,
-                  style: TextStyle(
-                    color: statusColor,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<List<AttendanceRecord>> _getAllMyAttendance() async {
-    final empId = LocalStorageService.getUserId() ?? '';
-    await LocalStorageService.init();
-    return LocalStorageService.getAttendance(empId);
   }
 }
+

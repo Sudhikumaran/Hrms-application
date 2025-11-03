@@ -5,7 +5,6 @@ import '../../services/hybrid_storage_service.dart';
 import 'admin_employees_screen.dart';
 import 'admin_analytics_screen.dart';
 import 'admin_location_screen.dart';
-import 'setup_auth_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   @override
@@ -140,18 +139,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               () {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => AdminLocationScreen()),
-                );
-              },
-            ),
-            SizedBox(height: 12),
-            _buildActionCard(
-              'Setup Authentication',
-              'Create Firebase Auth for all employees and admin',
-              Icons.vpn_key,
-              Colors.purple,
-              () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => SetupAuthScreen()),
                 );
               },
             ),

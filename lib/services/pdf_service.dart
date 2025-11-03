@@ -55,7 +55,7 @@ class PdfService {
         final isLate = _isLateCheckIn(checkInTime, employee.shift);
         final shiftLower = employee.shift.toLowerCase();
         final isNightShift = shiftLower.startsWith('night');
-        final isWfh = (todayRecord.status ?? '').toString().toUpperCase() == 'WFH';
+        final isWfh = todayRecord.status.toUpperCase() == 'WFH';
 
         if (isNightShift) {
           // Night shift
@@ -372,7 +372,7 @@ class PdfService {
               child: pw.Text(row['checkOut']),
             ),
           ],
-        )).toList(),
+        )),
         // Empty row if no data
         if (data.isEmpty)
           pw.TableRow(
@@ -395,16 +395,26 @@ class PdfService {
       final hour = int.parse(parts[0]);
       final minute = int.parse(parts[1]);
       
-      // Determine late threshold based on shift: late if check-in after 9:10 AM/PM
+      // Determine late threshold based on shift: late if check-in after 9:15 AM/PM
       final shiftLower = shift.toLowerCase();
-      if (shiftLower.startsWith('night')) {
-        // Night shift: late if after 9:10 PM
-        return hour >= 21 && minute > 10;
+      
+      // Check for night shift (handles "Night", "Night Shift", "9:00 PM", etc.)
+      final isNightShift = shiftLower.contains('night') || 
+                          shiftLower.contains('9:00 pm') || 
+                          shiftLower.contains('9:00 PM') ||
+                          shiftLower.contains('21:00');
+      
+      if (isNightShift) {
+        // Night shift: late if check-in is AFTER 9:15 PM (21:15)
+        // Example: 8:25 PM (20:25) = NOT late (early/on-time), 9:20 PM (21:20) = LATE
+        return hour > 21 || (hour == 21 && minute > 15);
       } else {
-        // Morning shift: late if after 9:10 AM
-        return hour > 9 || (hour == 9 && minute > 10);
+        // Morning shift: late if check-in is AFTER 9:15 AM
+        // Example: 8:45 AM = NOT late, 9:20 AM = LATE
+        return hour > 9 || (hour == 9 && minute > 15);
       }
     } catch (e) {
+      print('⚠️ Error in _isLateCheckIn (PDF): $e');
       return false;
     }
   }

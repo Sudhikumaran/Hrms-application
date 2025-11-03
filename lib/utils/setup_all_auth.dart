@@ -2,11 +2,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/firebase_service.dart';
 import '../services/hybrid_storage_service.dart';
-import '../services/local_storage_service.dart';
-import '../models/employee.dart';
 
 /// Utility to set up Firebase Authentication for all employees and admin
 class SetupAllAuth {
+  static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   /// Create Firebase Auth accounts for all employees
   static Future<Map<String, dynamic>> setupEmployeesAuth() async {
     try {
@@ -62,6 +61,29 @@ class SetupAllAuth {
             continue;
           }
           
+          // Save password to Firestore first (like admin) - ensures login works even without Firebase Auth
+          try {
+            print('💾 Saving password to Firestore for ${employee.empId}...');
+            final employeesRef = _firestore.collection('employees');
+            final query = await employeesRef
+                .where('empId', isEqualTo: employee.empId)
+                .limit(1)
+                .get();
+            
+            if (query.docs.isNotEmpty) {
+              await query.docs.first.reference.update({
+                'passwordHash': password,
+                'authMethod': 'direct', // Will be upgraded to 'firebase' if Auth succeeds
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+              print('✅ Password saved to Firestore for ${employee.empId}');
+            } else {
+              print('⚠️ Employee ${employee.empId} not found in Firestore, cannot save password');
+            }
+          } catch (e) {
+            print('⚠️ Error saving password to Firestore for ${employee.empId}: $e');
+          }
+          
           print('🔐 Creating Firebase Auth account for ${employee.empId} (${employee.email})...');
           
           final result = await FirebaseService.createEmployeeAccount(
@@ -72,6 +94,27 @@ class SetupAllAuth {
           
           if (result['success'] == true) {
             print('✅ Created Firebase Auth account for ${employee.empId}');
+            
+            // Upgrade auth method to 'firebase' in Firestore
+            try {
+              final employeesRef = _firestore.collection('employees');
+              final query = await employeesRef
+                  .where('empId', isEqualTo: employee.empId)
+                  .limit(1)
+                  .get();
+              
+              if (query.docs.isNotEmpty) {
+                await query.docs.first.reference.update({
+                  'authMethod': 'firebase',
+                  'firebaseUserId': result['uid'],
+                  'updatedAt': FieldValue.serverTimestamp(),
+                });
+                print('✅ Updated auth method to firebase for ${employee.empId}');
+              }
+            } catch (e) {
+              print('⚠️ Could not update auth method: $e');
+            }
+            
             created++;
             
             // Small delay to avoid rate limiting

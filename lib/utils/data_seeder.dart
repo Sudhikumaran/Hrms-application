@@ -14,11 +14,12 @@ class DataSeeder {
       }
 
       // Create sample employee
+      // Note: Password should be set by user during registration, not hardcoded
       final employeeData = {
         'employeeId': 'EMP001',
         'name': 'Sudhi Kumaran',
         'email': 'sudhi.kumaran@fortumars.com',
-        'password': 'password',
+        // Password removed for security - must be set during user registration
         'role': 'Frontend & Backend Developer',
         'department': 'Software Development',
         'shift': 'Day Shift (9:00 AM - 6:00 PM)',

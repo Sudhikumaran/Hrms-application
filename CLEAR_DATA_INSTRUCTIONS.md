@@ -37,5 +37,5 @@ If needed, I can add a developer option in the app to clear all data programmati
 **Note:** After clearing data:
 - The app will start fresh with no employees, attendance, or leave records
 - Users will need to sign up again to create new accounts
-- Admin login: Username: `ADMIN`, Password: `password`
+- Contact your administrator for login credentials
 

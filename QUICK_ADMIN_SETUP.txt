@@ -1,0 +1,31 @@
+===========================================
+QUICK ADMIN SETUP
+===========================================
+
+UID: MVsrV4s4PEWTbF1gxsdjib8jIO22
+
+STEP-BY-STEP:
+
+1. Go to: https://console.firebase.google.com
+2. Select your project
+3. Click "Firestore Database" (left sidebar)
+4. Click "Start collection" or "+" button
+5. Collection ID: admins
+6. Document ID: MVsrV4s4PEWTbF1gxsdjib8jIO22
+7. Add Field:
+   - Name: isAdmin
+   - Type: boolean (NOT string!)
+   - Value: true
+8. Click "Save"
+
+DONE! ✅
+
+Now try logging in with admin credentials.
+
+The app will verify admin status by checking:
+✅ Firebase Authentication (already done)
+✅ Firestore admins/{UID} with isAdmin: true
+
+===========================================
+
+

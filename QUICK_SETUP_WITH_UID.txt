@@ -1,0 +1,46 @@
+═══════════════════════════════════════════════════════════
+  QUICK ADMIN SETUP - UID: vge8TkWKrEUbHLzWQM1TpaGJ0ul2
+═══════════════════════════════════════════════════════════
+
+STEP 1: Go to Firestore
+───────────────────────────────────────────────────────────
+URL: https://console.firebase.google.com/project/fortumars-hrms-63078/firestore
+
+STEP 2: Create Admin Document
+───────────────────────────────────────────────────────────
+1. Click "Start collection" (or find "admins" collection)
+2. Collection name: admins
+3. Document ID: vge8TkWKrEUbHLzWQM1TpaGJ0ul2
+   (Paste this exact UID as the Document ID)
+
+STEP 3: Add Fields
+───────────────────────────────────────────────────────────
+Field 1:
+  Name: isAdmin
+  Type: boolean
+  Value: true
+
+Field 2:
+  Name: uid
+  Type: string
+  Value: vge8TkWKrEUbHLzWQM1TpaGJ0ul2
+
+Field 3:
+  Name: email
+  Type: string
+  Value: admin@demo.com (or your email)
+
+STEP 4: Save
+───────────────────────────────────────────────────────────
+Click "Save"
+
+STEP 5: Login
+───────────────────────────────────────────────────────────
+Email: admin@demo.com
+Password: admin123
+
+═══════════════════════════════════════════════════════════
+  IMPORTANT: Document ID MUST match UID exactly!
+═══════════════════════════════════════════════════════════
+
+

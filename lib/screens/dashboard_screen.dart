@@ -7,7 +7,7 @@ import 'dart:async';
 import 'attendance_screen.dart';
 import 'leave_screen.dart';
 import '../services/local_storage_service.dart';
-import '../models/employee.dart';
+import '../services/hybrid_storage_service.dart';
 import 'notifications_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -37,7 +37,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (userId == null) return;
     
     // Load employee name
-    final employees = LocalStorageService.getEmployees();
+    final employees = HybridStorageService.getEmployees();
     if (employees.isNotEmpty) {
       final employee = employees.firstWhere((e) => e.empId == userId, orElse: () => employees.first);
       _employeeName = employee.name;
@@ -458,7 +458,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     
     // Load monthly hours from attendance records
     await LocalStorageService.init();
-    final records = LocalStorageService.getAttendance(userId!);
+    final records = HybridStorageService.getAttendance(userId!);
     double totalHours = 0;
     for (final r in records) {
       if (r.date.startsWith(monthKey)) {

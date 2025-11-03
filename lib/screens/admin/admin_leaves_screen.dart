@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../services/local_storage_service.dart';
+import '../../services/hybrid_storage_service.dart';
 import '../../models/leave_request.dart';
 import '../../models/employee.dart';
 
@@ -22,12 +23,53 @@ class _AdminLeavesScreenState extends State<AdminLeavesScreen> {
 
   Future<void> _loadRequests() async {
     await LocalStorageService.init();
-    final stored = LocalStorageService.getLeaveRequests();
-    final employees = LocalStorageService.getEmployees();
+    final stored = HybridStorageService.getLeaveRequests();
+    // Filter out dummy/old leave requests (dates before 2025)
+    final cleaned = stored.where((req) {
+      try {
+        // Parse start date - handle both formats: yyyy-MM-dd and dd-MM-yyyy
+        String startDateStr = req.startDate;
+        DateTime? startDate;
+        
+        // Try yyyy-MM-dd format first
+        if (startDateStr.contains('-') && startDateStr.split('-')[0].length == 4) {
+          startDate = DateTime.tryParse(startDateStr);
+        } else if (startDateStr.contains('-') && startDateStr.split('-')[2].length == 4) {
+          // dd-MM-yyyy format
+          final parts = startDateStr.split('-');
+          if (parts.length == 3) {
+            startDate = DateTime.tryParse('${parts[2]}-${parts[1]}-${parts[0]}');
+          }
+        }
+        
+        // Remove if date is before 2025-01-01 (dummy data cleanup)
+        if (startDate != null && startDate.isBefore(DateTime(2025, 1, 1))) {
+          return false;
+        }
+        
+        // Also filter known dummy patterns
+        if (req.reason.toLowerCase() == 'medical appointment' && 
+            (req.empId == 'EMP002' || req.empId == 'EMP003') &&
+            req.startDate.contains('2024')) {
+          return false;
+        }
+        
+        return true;
+      } catch (e) {
+        return true; // Keep if parsing fails
+      }
+    }).toList();
+    
+    // Save cleaned list back if it changed
+    if (cleaned.length != stored.length) {
+      await LocalStorageService.saveLeaveRequests(cleaned);
+    }
+    
+    final employees = HybridStorageService.getEmployees();
     // Build employee map for quick lookup
     _employeeMap = {for (var emp in employees) emp.empId: emp};
     setState(() {
-      _requests = stored;
+      _requests = cleaned;
     });
   }
 
@@ -65,7 +107,12 @@ class _AdminLeavesScreenState extends State<AdminLeavesScreen> {
       }
       return r;
     }).toList();
-    await LocalStorageService.saveLeaveRequests(updated);
+    // Update via HybridStorageService for each request (syncs to Firestore)
+    for (final req in updated) {
+      if (ids.contains(req.id)) {
+        await HybridStorageService.updateLeaveRequest(req.id, status, note: note);
+      }
+    }
     setState(() => _requests = updated);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -119,74 +166,81 @@ class _AdminLeavesScreenState extends State<AdminLeavesScreen> {
             ]),
         ],
       ),
-      body: _requests.isEmpty
-          ? Center(child: Text('No leave requests'))
-          : ListView.separated(
-        padding: EdgeInsets.all(16),
-        itemCount: _requests.length,
-        separatorBuilder: (_, __) => SizedBox(height: 8),
-        itemBuilder: (context, i) {
-          final r = _requests[i];
-          final selected = _selected.contains(r.id);
-          final employee = _employeeMap[r.empId];
-          final employeeName = employee?.name ?? r.empId;
-          return GestureDetector(
-            onLongPress: () => _toggleSelect(r.id),
-            child: Card(
-              elevation: 2,
-              child: ExpansionTile(
-                leading: Checkbox(value: selected, onChanged: (_) => _toggleSelect(r.id)),
-                title: Text(employeeName, style: TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text('${r.type} • ${r.status}'),
-                trailing: selected ? null : Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(icon: Icon(Icons.check, color: Colors.green), onPressed: () => _approveOne(r)),
-                    IconButton(icon: Icon(Icons.close, color: Colors.red), onPressed: () => _rejectOne(r)),
-                  ],
-                ),
-                children: [
-                  Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+      body: Builder(
+        builder: (context) {
+          // Filter to show only pending requests
+          final pendingRequests = _requests.where((r) => r.status.toLowerCase() == 'pending').toList();
+          if (pendingRequests.isEmpty) {
+            return Center(child: Text('No pending leave requests'));
+          }
+          return ListView.separated(
+            padding: EdgeInsets.all(16),
+            itemCount: pendingRequests.length,
+            separatorBuilder: (_, __) => SizedBox(height: 8),
+            itemBuilder: (context, i) {
+              final r = pendingRequests[i];
+              final selected = _selected.contains(r.id);
+              final employee = _employeeMap[r.empId];
+              final employeeName = employee?.name ?? r.empId;
+              return GestureDetector(
+                onLongPress: () => _toggleSelect(r.id),
+                child: Card(
+                  elevation: 2,
+                  child: ExpansionTile(
+                    leading: Checkbox(value: selected, onChanged: (_) => _toggleSelect(r.id)),
+                    title: Text(employeeName, style: TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text('${r.type} • ${r.status}'),
+                    trailing: selected ? null : Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        _buildDetailRow('Employee ID', r.empId),
-                        SizedBox(height: 8),
-                        _buildDetailRow('Leave Type', r.type),
-                        SizedBox(height: 8),
-                        _buildDetailRow('Reason', r.reason),
-                        SizedBox(height: 8),
-                        _buildDetailRow('Dates', 'From ${r.startDate} to ${r.endDate}'),
-                        SizedBox(height: 8),
-                        _buildDetailRow('Status', r.status),
-                        SizedBox(height: 8),
-                        _buildDetailRow('SLA', '${_pendingDays(r.startDate)} days'),
+                        IconButton(icon: Icon(Icons.check, color: Colors.green), onPressed: () => _approveOne(r)),
+                        IconButton(icon: Icon(Icons.close, color: Colors.red), onPressed: () => _rejectOne(r)),
                       ],
                     ),
-                  ),
-                  if (!selected)
-                    Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          IconButton(
-                            icon: Icon(Icons.check_circle, color: Colors.green),
-                            onPressed: () => _approveOne(r),
-                            tooltip: 'Approve',
-                          ),
-                          IconButton(
-                            icon: Icon(Icons.cancel, color: Colors.red),
-                            onPressed: () => _rejectOne(r),
-                            tooltip: 'Reject',
-                          ),
-                        ],
+                    children: [
+                      Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildDetailRow('Employee ID', r.empId),
+                            SizedBox(height: 8),
+                            _buildDetailRow('Leave Type', r.type),
+                            SizedBox(height: 8),
+                            _buildDetailRow('Reason', r.reason),
+                            SizedBox(height: 8),
+                            _buildDetailRow('Dates', 'From ${r.startDate} to ${r.endDate}'),
+                            SizedBox(height: 8),
+                            _buildDetailRow('Status', r.status),
+                            SizedBox(height: 8),
+                            _buildDetailRow('SLA', '${_pendingDays(r.startDate)} days'),
+                          ],
+                        ),
                       ),
-                    ),
-                ],
-              ),
-            ),
+                      if (!selected)
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              IconButton(
+                                icon: Icon(Icons.check_circle, color: Colors.green),
+                                onPressed: () => _approveOne(r),
+                                tooltip: 'Approve',
+                              ),
+                              IconButton(
+                                icon: Icon(Icons.cancel, color: Colors.red),
+                                onPressed: () => _rejectOne(r),
+                                tooltip: 'Reject',
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
           );
         },
       ),

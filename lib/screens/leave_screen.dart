@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import '../models/leave_request.dart';
 import '../services/local_storage_service.dart';
+import '../services/hybrid_storage_service.dart';
 
 class LeaveScreen extends StatefulWidget {
   @override
@@ -31,6 +32,12 @@ class _LeaveScreenState extends State<LeaveScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(() {
+      // Refresh leave requests when switching to "My Requests" tab
+      if (_tabController.index == 1) {
+        _initializeLeaveRequests();
+      }
+    });
     _initializeLeaveRequests();
     _selectedLeaveType = _leaveTypes.first;
   }
@@ -46,12 +53,103 @@ class _LeaveScreenState extends State<LeaveScreen>
 
   Future<void> _initializeLeaveRequests() async {
     await LocalStorageService.init();
-    final stored = LocalStorageService.getLeaveRequests();
-    if (stored.isNotEmpty) {
-      leaveRequests = stored;
-    } else {
-      leaveRequests = [];
+    final stored = HybridStorageService.getLeaveRequests();
+    
+    // Step 1: Remove duplicates by unique key (empId_startDate_endDate_type_status)
+    final Map<String, LeaveRequest> uniqueRequests = {};
+    String makeKey(LeaveRequest req) => '${req.empId}_${req.startDate}_${req.endDate}_${req.type}_${req.status}';
+    
+    for (var req in stored) {
+      final key = makeKey(req);
+      // Keep the one with the latest ID (assuming newer ones have larger IDs)
+      if (!uniqueRequests.containsKey(key)) {
+        uniqueRequests[key] = req;
+      } else {
+        // If duplicate found, keep the one with the newer ID
+        try {
+          final existingId = int.tryParse(uniqueRequests[key]!.id) ?? 0;
+          final newId = int.tryParse(req.id) ?? 0;
+          if (newId > existingId) {
+            uniqueRequests[key] = req;
+          }
+        } catch (e) {
+          // If IDs aren't numeric, keep the existing one
+        }
+      }
     }
+    
+    // Step 2: Filter out dummy/old leave requests (dates before 2025)
+    final cleaned = uniqueRequests.values.where((req) {
+      try {
+        // Parse start date - handle both formats: yyyy-MM-dd and dd-MM-yyyy
+        String startDateStr = req.startDate;
+        DateTime? startDate;
+        
+        // Try yyyy-MM-dd format first
+        if (startDateStr.contains('-') && startDateStr.split('-')[0].length == 4) {
+          startDate = DateTime.tryParse(startDateStr);
+        } else if (startDateStr.contains('-') && startDateStr.split('-')[2].length == 4) {
+          // dd-MM-yyyy format
+          final parts = startDateStr.split('-');
+          if (parts.length == 3) {
+            startDate = DateTime.tryParse('${parts[2]}-${parts[1]}-${parts[0]}');
+          }
+        }
+        
+        // Remove if date is before 2025-01-01 (dummy data cleanup)
+        if (startDate != null && startDate.isBefore(DateTime(2025, 1, 1))) {
+          return false;
+        }
+        
+        // Also filter known dummy patterns
+        if (req.reason.toLowerCase() == 'medical appointment' && 
+            (req.empId == 'EMP002' || req.empId == 'EMP003') &&
+            req.startDate.contains('2024')) {
+          return false;
+        }
+        
+        return true;
+      } catch (e) {
+        return true; // Keep if parsing fails
+      }
+    }).toList();
+    
+    // Sort by start date (newest first)
+    cleaned.sort((a, b) {
+      try {
+        // Parse dates for comparison
+        final aParts = a.startDate.split('-');
+        final bParts = b.startDate.split('-');
+        DateTime? aDate, bDate;
+        
+        if (aParts.length == 3 && aParts[2].length == 4) {
+          aDate = DateTime.tryParse('${aParts[2]}-${aParts[1]}-${aParts[0]}');
+        } else if (aParts.length == 3 && aParts[0].length == 4) {
+          aDate = DateTime.tryParse(a.startDate);
+        }
+        
+        if (bParts.length == 3 && bParts[2].length == 4) {
+          bDate = DateTime.tryParse('${bParts[2]}-${bParts[1]}-${bParts[0]}');
+        } else if (bParts.length == 3 && bParts[0].length == 4) {
+          bDate = DateTime.tryParse(b.startDate);
+        }
+        
+        if (aDate != null && bDate != null) {
+          return bDate.compareTo(aDate); // Descending (newest first)
+        }
+        return 0;
+      } catch (e) {
+        return 0;
+      }
+    });
+    
+    // Save cleaned list back if it changed
+    if (cleaned.length != uniqueRequests.length || cleaned.length != stored.length) {
+      await LocalStorageService.saveLeaveRequests(cleaned);
+      print('✅ Cleaned leave requests: ${stored.length} → ${cleaned.length} (removed ${stored.length - cleaned.length} duplicates/old)');
+    }
+    
+    leaveRequests = cleaned;
     setState(() {});
   }
 
@@ -536,8 +634,43 @@ class _LeaveScreenState extends State<LeaveScreen>
       status: 'Pending',
     );
 
-    leaveRequests.add(request);
-    await LocalStorageService.saveLeaveRequests(leaveRequests);
+    // Check for duplicate before adding
+    final isDuplicate = leaveRequests.any((existing) =>
+      existing.empId == request.empId &&
+      existing.startDate == request.startDate &&
+      existing.endDate == request.endDate &&
+      existing.type == request.type &&
+      existing.status == request.status);
+    
+    if (isDuplicate) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Leave request already exists for these dates'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+    
+    // Save via HybridStorageService (syncs to Firestore)
+    final saved = await HybridStorageService.saveLeaveRequest(request);
+    
+    if (!saved) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to save leave request. It may already exist.'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    // Reload leave requests from storage to get the latest data
+    await _initializeLeaveRequests();
 
     _fromDate = null;
     _toDate = null;
