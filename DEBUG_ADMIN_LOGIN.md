@@ -101,3 +101,5 @@ Run the app and check console output when clicking "Sign In". Share the error me
 **Most Common Fix**: Create user in Firebase Authentication Console first!
 
 
+
+

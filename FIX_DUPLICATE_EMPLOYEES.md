@@ -63,3 +63,5 @@ The code now:
 **Next Step**: Delete duplicate documents in Firestore Console, then the sync will maintain only one document per employee.
 
 
+
+

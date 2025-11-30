@@ -77,3 +77,5 @@ Once logged in:
 **Note**: The app has auto-setup functionality, so if you create the user in Firebase Authentication and log in, it will automatically create the admin document for you!
 
 
+
+

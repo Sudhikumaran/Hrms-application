@@ -52,3 +52,5 @@ After waiting, I can check if your file has OAuth clients. Just paste the new go
 **The key is: WAIT. Firebase needs time to process SHA-1 and generate OAuth clients.** ⏳
 
 
+
+

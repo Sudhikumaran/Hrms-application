@@ -65,3 +65,5 @@ flutter clean && flutter pub get && flutter run
 **Most likely: You need to wait a bit longer for Firebase to process SHA-1!** ⏳
 
 
+
+
